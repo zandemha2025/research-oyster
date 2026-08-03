@@ -64,6 +64,20 @@ Ask:
 
 You should receive connector readiness plus a job ID and research plan. A disconnected optional source should explain how to enable it instead of preventing other sources from working.
 
+### 6. Add supervised browser capture (optional)
+
+1. Open `chrome://extensions` in Chrome or `edge://extensions` in Edge.
+2. Enable **Developer mode**.
+3. Choose **Load unpacked** and select the repository's `browser_extension` folder.
+4. Keep the Oyster control center open at `http://127.0.0.1:8765`.
+5. In the control center, click **Create one-time pairing code**.
+6. Open the extension's **Pairing & settings**, enter that code, and pair within ten minutes.
+7. Select an active research job and one of its research questions.
+8. Highlight text and choose **Review in Research Oyster**, or click **Find visible candidates**.
+9. Review every candidate and choose **Approve & save** only when it is relevant and appropriate to retain.
+
+Unapproved candidates remain in extension-local storage. When the user clicks approval, one retry-safe database transaction writes the evidence into the selected job and immediately scrubs its temporary staging fields. Legacy or interrupted server-side pending content expires and is purged after 24 hours. Use **Unpair** to revoke the server token and clear local candidates.
+
 ## Option B: manual macOS or Linux installation
 
 Install Python 3.11 or newer and PostgreSQL 15 or newer using your operating system's package manager. Then:
@@ -155,3 +169,7 @@ The configured bot is not authorized for the channel or lacks the necessary inte
 ### A site blocks crawling
 
 Do not bypass the site's protections. Use an official API, an authorized provider/Actor, an RSS feed, or exclude the source. Respect the site's terms and rate limits.
+
+### Port 8765 is already in use
+
+Oyster uses this stable loopback port so the extension can reconnect safely. Stop the other local process using port 8765, then reopen Oyster. Do not change the extension to a remote address; it intentionally accepts only `http://127.0.0.1` or `http://localhost`.

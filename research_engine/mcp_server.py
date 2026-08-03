@@ -15,6 +15,7 @@ from research_engine.connectors import search_kick as search_kick_connector
 from research_engine.connectors import search_twitch as search_twitch_connector
 from research_engine.connectors import crawl_web_page as crawl_web_connector
 from research_engine.planner import build_plan
+from research_engine.capture import CaptureStore
 from research_engine.store import ResearchStore
 from settings import Settings
 
@@ -124,7 +125,14 @@ def connector_status() -> dict[str, Any]:
         "discord_messages": {"ready": bool(settings.discord_bot_token), "setup": "Install your Discord bot in each server and grant View Channel, Read Message History, and Message Content intent."},
         "rss": {"ready": True, "scope": "Any public RSS or Atom URL."},
         "self_hosted_web": {"ready": True, "engine": "Scrapling", "fallback": "Use an Apify Actor when a page needs browser interaction or blocks direct collection."},
+        "supervised_browser_capture": {"ready": True, "scope": "User-approved excerpts from pages the researcher can already access.", "setup": "Start the Research Oyster control center, load the browser_extension folder in Chrome or Edge, and pair it with a one-time code.", "boundary": "Candidates remain local until the user explicitly approves one; Oyster never receives browser cookies or passwords."},
     }
+
+
+@mcp.tool()
+def get_browser_capture_mission(job_id: int) -> dict[str, Any]:
+    """Turn an existing research brief into questions and terms for supervised browser capture."""
+    return CaptureStore(settings.database_url).mission(job_id)
 
 
 @mcp.prompt()
@@ -136,6 +144,7 @@ Decision to support: {decision or 'Infer it, and state the inference.'}
 1. Call create_research_job before searching.
 2. Review its questions, source-specific queries, and clarifications. Infer sensible defaults; ask the user only when a missing answer would materially change the result.
 3. Call connector_status and choose the strongest ready route: official API, RSS, Apify, then self-hosted web crawl.
+   When useful evidence is visible only inside a page the researcher is authorized to access, use the supervised browser-capture mission and let the user approve captures.
 4. Discover relevant sources. Use native web tools and Oyster connectors; do not force irrelevant platforms.
 5. Call add_evidence for every finding that may support a material claim.
 6. Triangulate important claims across independent sources and actively seek counterevidence.

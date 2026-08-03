@@ -7,7 +7,9 @@ runtime dependency beyond Python's standard library and the pipeline itself.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -19,7 +21,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from db.queries import connect
+from db.queries import connect, migrate
+from research_engine.capture import CaptureStore
+from research_engine.store import ResearchStore
 from settings import Settings
 
 
@@ -28,6 +32,50 @@ OUTPUT = ROOT / "output"
 TOKEN = secrets.token_urlsafe(24)
 JOBS: dict[str, dict] = {}
 JOBS_LOCK = threading.Lock()
+CAPTURE_PORT = 8765
+EXTENSION_ORIGIN = re.compile(r"^chrome-extension://([a-p]{32})$")
+SCHEMA_LOCK = threading.Lock()
+SCHEMA_READY = False
+RATE_LOCK = threading.Lock()
+RATE_EVENTS: dict[tuple[str, str], list[float]] = {}
+
+
+def capture_store() -> CaptureStore:
+    """Create the capture boundary lazily so Setup can still open before the database is ready."""
+    global SCHEMA_READY
+    settings = Settings()
+    if not SCHEMA_READY:
+        with SCHEMA_LOCK:
+            if not SCHEMA_READY:
+                with connect(settings.database_url) as conn:
+                    migrate(conn, ROOT / "db" / "migrations")
+                SCHEMA_READY = True
+    return CaptureStore(settings.database_url)
+
+
+def extension_id_from_origin(origin: str) -> str:
+    match = EXTENSION_ORIGIN.fullmatch(origin.strip())
+    if not match:
+        raise PermissionError("Open this request from the paired Oyster browser extension.")
+    return match.group(1)
+
+
+def bearer_token(header: str) -> str:
+    scheme, separator, token = header.partition(" ")
+    if not separator or scheme.lower() != "bearer" or not token.strip():
+        raise PermissionError("Pair the browser extension with Oyster before capturing.")
+    return token.strip()
+
+
+def enforce_rate(bucket: str, key: str, limit: int, window_seconds: int = 60) -> None:
+    """Bound local extension traffic and pairing attempts without retaining request content."""
+    now = time.monotonic()
+    with RATE_LOCK:
+        events = [stamp for stamp in RATE_EVENTS.get((bucket, key), []) if now - stamp < window_seconds]
+        if len(events) >= limit:
+            raise PermissionError("Too many capture requests. Wait a minute and try again.")
+        events.append(now)
+        RATE_EVENTS[(bucket, key)] = events
 
 
 def monday_for_today() -> str:
@@ -79,6 +127,7 @@ def health() -> dict:
     checks.append({"name": "Apify", "ok": bool(settings and settings.apify_token), "optional": True, "detail": "Token saved" if settings and settings.apify_token else "Optional — not connected"})
     checks.append({"name": "X search", "ok": bool(settings and (settings.x_bearer_token or settings.apify_token)), "optional": True, "detail": "Official API ready" if settings and settings.x_bearer_token else "Apify fallback ready" if settings and settings.apify_token else "Optional — not connected"})
     checks.append({"name": "Discord messages", "ok": bool(settings and settings.discord_bot_token), "optional": True, "detail": "Bot token saved" if settings and settings.discord_bot_token else "Optional — not connected"})
+    checks.append({"name": "Browser capture", "ok": db_ok, "detail": "Ready to pair" if db_ok else "Waiting for database"})
     checks.append({"name": "Press", "ok": db_ok, "detail": "No login needed" if db_ok else "Waiting for database"})
     weekly = latest_output("*-gaming-pulse.html")
     fresh = latest_output("*-fresh-signals.md")
@@ -186,7 +235,7 @@ def start_job(action: str, payload: dict) -> str:
 
 HTML = r'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Gaming Culture Pulse</title><style>
+<title>Research Oyster</title><style>
 :root{--ink:#18211d;--muted:#66716b;--paper:#f6f4ee;--card:#fff;--green:#26734d;--red:#a53b32;--line:#dedfd9;--accent:#173f35}
 *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:1050px;margin:auto;padding:46px 24px 80px}
 header{display:flex;justify-content:space-between;gap:24px;align-items:end;margin-bottom:30px}h1{font:700 clamp(34px,6vw,60px)/.95 Georgia,serif;letter-spacing:-2px;margin:0;max-width:620px}header p{color:var(--muted);max-width:330px;margin:0}
@@ -194,10 +243,11 @@ header{display:flex;justify-content:space-between;gap:24px;align-items:end;margi
 .actions{display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px;margin:18px 0 28px}.action{min-height:150px;text-align:left;padding:22px;border:1px solid var(--line);border-radius:18px;background:var(--card);cursor:pointer;transition:.15s}.action:hover{transform:translateY(-2px);border-color:#9ba8a1}.action.primary{background:var(--accent);color:white}.action b{display:block;font-size:19px;margin-bottom:7px}.action span{color:var(--muted)}.action.primary span{color:#d9e5df}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.panel{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px}.panel h2{font-size:19px;margin:0 0 16px}.check{display:flex;justify-content:space-between;border-top:1px solid #eee;padding:10px 0}.check:first-of-type{border:0}.ok{color:var(--green)}.bad{color:var(--red)}
 button,.button{font:inherit;font-weight:650;border:0;border-radius:10px;padding:11px 15px;background:#e8ece9;color:var(--ink);cursor:pointer;text-decoration:none;display:inline-block}button.dark{background:var(--accent);color:white}.links{display:flex;gap:10px;flex-wrap:wrap}.job{display:none;margin:18px 0;padding:18px;border-radius:14px;background:#fff9df;border:1px solid #eadb96}.job.show{display:block}.job.failed{background:#fff0ee;border-color:#e3aaa4}.job.success{background:#eaf6ed;border-color:#aad2b5}details{margin-top:12px;color:var(--muted)}pre{white-space:pre-wrap;font-size:12px;max-height:220px;overflow:auto}
+.pairing{margin-top:18px}.paircode{display:none;margin:12px 0;padding:14px;border:1px dashed #81948a;border-radius:10px;background:#f4faf6}.paircode.show{display:block}.paircode code{display:block;font-size:20px;font-weight:750;letter-spacing:1px;overflow-wrap:anywhere}.muted{color:var(--muted)}
 .modal{display:none;position:fixed;inset:0;background:#0008;padding:24px;overflow:auto}.modal.show{display:block}.dialog{max-width:700px;margin:4vh auto;background:white;border-radius:20px;padding:28px}.dialog h2{margin-top:0}.field{margin:15px 0}.field label{display:block;font-weight:650;margin-bottom:5px}.field small{color:var(--muted)}input{width:100%;font:inherit;padding:11px;border:1px solid #bfc5c1;border-radius:9px}.row{display:flex;gap:10px;justify-content:flex-end;margin-top:22px}
 @media(max-width:760px){header{display:block}header p{margin-top:15px}.actions,.grid{grid-template-columns:1fr}.action{min-height:120px}}
 </style></head><body><main class="wrap">
-<header><h1>Gaming Culture Pulse</h1><p>Collect reliable gaming signals now or let the weekly schedule build the bigger picture.</p></header>
+<header><h1>Research Oyster</h1><p>Plan open-ended research, collect traceable evidence, and turn connected signals into a cited dossier.</p></header>
 <section class="status"><div><strong id="headline">Checking your system...</strong><div id="subline">This takes a moment.</div></div><button onclick="openSetup()">Setup</button></section>
 <section id="job" class="job"><strong id="jobTitle"></strong><div id="jobMessage"></div><details><summary>Technical details</summary><pre id="jobDetails"></pre></details></section>
 <section class="actions">
@@ -206,7 +256,9 @@ button,.button{font:inherit;font-weight:650;border:0;border-radius:10px;padding:
  <button class="action" onclick="run('report')"><b>Create weekly report</b><span>Build this week's Markdown and HTML report.</span></button>
 </section>
 <section class="grid"><div class="panel"><h2>System check</h2><div id="checks"></div><button onclick="refresh()">Check again</button></div>
-<div class="panel"><h2>Your reports</h2><p id="reportText">No reports found yet.</p><div class="links"><button id="weekly" onclick="openFile('weekly')" disabled>Open weekly report</button><button id="fresh" onclick="openFile('fresh')" disabled>Open fresh brief</button><button onclick="openFile('output')">Open output folder</button></div></div></section>
+<div class="panel"><h2>Your reports</h2><p id="reportText">No reports found yet.</p><div class="links"><button id="weekly" onclick="openFile('weekly')" disabled>Open weekly report</button><button id="fresh" onclick="openFile('fresh')" disabled>Open fresh brief</button><button onclick="openFile('output')">Open output folder</button></div></div>
+<div class="panel pairing"><h2>Supervised browser capture</h2><p>Pair the Oyster extension to save approved excerpts from pages you can already access. Oyster never receives browser cookies or passwords.</p><button id="pairButton" onclick="createPairingCode()">Create one-time pairing code</button><div id="pairCode" class="paircode" aria-live="polite"><span class="muted">Local service</span><code id="captureAddress">http://127.0.0.1:8765</code><span class="muted">Pairing code — expires in 10 minutes</span><code id="captureCode"></code></div></div>
+<div class="panel"><h2>How capture feeds research</h2><p>Select an active brief in the extension. Oyster turns that brief into a capture mission, keeps candidates in review, and promotes only approved captures into the original dossier.</p><p class="muted">Best-effort name redaction is on by default; review every excerpt. Only capture material you are authorized to view and retain.</p></div></section>
 </main>
 <div id="modal" class="modal"><div class="dialog"><h2>Connections &amp; setup</h2><p>The database is required. Every research connector is optional: add Twitch, Kick, X, Apify, or an authorized Discord bot only when you need that source. Saved values stay in a private file on this computer.</p>
  <div class="field"><label>Database address</label><input id="db" placeholder="postgresql://user:password@localhost:5432/gaming_pulse"><small>Required. This tells the app where to save its history.</small></div>
@@ -227,6 +279,7 @@ function showJob(title,msg,status,details=''){const e=document.getElementById('j
 async function openSetup(){try{const saved=await api('/api/settings');db.value='';db.placeholder=saved.configured.database?'Saved — leave blank to keep':'postgresql://user:password@localhost:5432/research';hour.value=saved.collection_hour_utc??16;const labels={tid:'twitch',tsecret:'twitch',kid:'kick',ksecret:'kick',xtoken:'x',apifytoken:'apify',discordtoken:'discord_bot'};for(const [id,key] of Object.entries(labels)){document.getElementById(id).placeholder=saved.configured[key]?'Saved — leave blank to keep':'Not configured'}}catch(e){showJob('Could not load setup',e.message,'failed')}document.getElementById('modal').classList.add('show')}function closeSetup(){document.getElementById('modal').classList.remove('show')}
 async function saveSetup(){const values={DATABASE_URL:db.value,TWITCH_CLIENT_ID:tid.value,TWITCH_CLIENT_SECRET:tsecret.value,KICK_CLIENT_ID:kid.value,KICK_CLIENT_SECRET:ksecret.value,X_BEARER_TOKEN:xtoken.value,APIFY_TOKEN:apifytoken.value,DISCORD_BOT_TOKEN:discordtoken.value,COLLECTION_HOUR_UTC:hour.value};try{await api('/api/settings',values);closeSetup();await refresh();run('setup')}catch(e){alert(e.message)}}
 async function openFile(kind){await api('/api/open',{kind})}
+async function createPairingCode(){if(!state.ready){openSetup();return}try{const x=await api('/api/capture/pairing-code',{});document.getElementById('captureCode').textContent=x.pairing_code;document.getElementById('pairCode').classList.add('show');document.getElementById('pairButton').textContent='Create a new code'}catch(e){showJob('Could not create pairing code',e.message,'failed')}}
 refresh();
 </script></body></html>'''
 
@@ -235,13 +288,55 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:
         return
 
-    def send_json(self, value: dict, status: int = 200) -> None:
+    def send_json(self, value: object, status: int = 200) -> None:
         body = json.dumps(value).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        origin = self.headers.get("Origin", "")
+        if EXTENSION_ORIGIN.fullmatch(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.end_headers()
         self.wfile.write(body)
+
+    def read_json(self, maximum: int = 262_144) -> dict:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length < 0 or length > maximum:
+            raise ValueError("Capture request is too large.")
+        value = json.loads(self.rfile.read(length) or b"{}")
+        if not isinstance(value, dict):
+            raise ValueError("Request body must be a JSON object.")
+        return value
+
+    def capture_client(self) -> tuple[CaptureStore, dict]:
+        expected_hosts = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
+        if self.headers.get("Host", "").lower() not in expected_hosts:
+            raise PermissionError("Capture requests must use Oyster's exact local address.")
+        origin = self.headers.get("Origin", "")
+        extension_id_from_origin(origin)
+        token = bearer_token(self.headers.get("Authorization", ""))
+        enforce_rate("capture", hashlib.sha256(token.encode()).hexdigest(), 120)
+        store = capture_store()
+        client = store.authenticate(token, origin=origin)
+        return store, client
+
+    def do_OPTIONS(self) -> None:
+        try:
+            expected_hosts = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
+            if self.headers.get("Host", "").lower() not in expected_hosts:
+                raise PermissionError("Preflight must use Oyster's exact local address.")
+            origin = self.headers.get("Origin", "")
+            extension_id_from_origin(origin)
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+            self.send_header("Access-Control-Max-Age", "600")
+            self.send_header("Vary", "Origin")
+            self.end_headers()
+        except PermissionError:
+            self.send_json({"error": "This origin is not allowed."}, 403)
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -261,17 +356,64 @@ class Handler(BaseHTTPRequestHandler):
             with JOBS_LOCK:
                 job = JOBS.get(job_id)
             self.send_json(job or {"error": "Job not found"}, 200 if job else 404)
+        elif parsed.path == "/api/capture/jobs":
+            try:
+                _, _client = self.capture_client()
+                self.send_json([job for job in ResearchStore(Settings().database_url).list_jobs(100) if job["status"] == "active"])
+            except PermissionError as exc:
+                self.send_json({"error": str(exc)}, 403)
+            except Exception as exc:
+                self.send_json({"error": friendly_error(str(exc))}, 400)
+        elif parsed.path.startswith("/api/capture/jobs/") and parsed.path.endswith("/mission"):
+            try:
+                store, _client = self.capture_client()
+                job_id = int(parsed.path.split("/")[4])
+                self.send_json(store.mission(job_id))
+            except PermissionError as exc:
+                self.send_json({"error": str(exc)}, 403)
+            except Exception as exc:
+                self.send_json({"error": friendly_error(str(exc))}, 400)
+        elif parsed.path == "/api/capture/pending":
+            try:
+                store, client = self.capture_client()
+                query = dict(part.split("=", 1) for part in parsed.query.split("&") if "=" in part)
+                job_id = int(query["job_id"]) if query.get("job_id") else None
+                self.send_json(store.list_pending(job_id=job_id, client_id=client["client_id"]))
+            except PermissionError as exc:
+                self.send_json({"error": str(exc)}, 403)
+            except Exception as exc:
+                self.send_json({"error": friendly_error(str(exc))}, 400)
         else:
             self.send_json({"error": "Not found"}, 404)
 
     def do_POST(self) -> None:
-        if self.headers.get("X-Pulse-Token") != TOKEN:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/capture/pair":
+            try:
+                origin = self.headers.get("Origin", "")
+                extension_id = extension_id_from_origin(origin)
+                expected_hosts = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
+                if self.headers.get("Host", "").lower() not in expected_hosts:
+                    raise PermissionError("Pairing must use Oyster's exact local address.")
+                enforce_rate("pair", extension_id, 10)
+                payload = self.read_json(16_384)
+                result = capture_store().exchange_pairing_code(
+                    str(payload.get("code", "")), client_name=str(payload.get("client_name", "Oyster browser extension")),
+                    extension_id=extension_id,
+                )
+                self.send_json(result)
+            except PermissionError as exc:
+                self.send_json({"error": str(exc)}, 403)
+            except Exception as exc:
+                self.send_json({"error": friendly_error(str(exc))}, 400)
+            return
+        is_capture_request = parsed.path.startswith("/api/capture/") and parsed.path != "/api/capture/pairing-code"
+        if not is_capture_request and self.headers.get("X-Pulse-Token") != TOKEN:
             self.send_json({"error": "This control-center session has expired. Refresh the page."}, 403)
             return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length) or b"{}")
-            if self.path == "/api/settings":
+            payload = self.read_json()
+            if parsed.path == "/api/settings":
                 if not str(payload.get("DATABASE_URL", "")).strip():
                     try:
                         Settings()
@@ -282,25 +424,90 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("The collection hour must be between 0 and 23.")
                 save_settings(payload)
                 self.send_json({"ok": True})
-            elif self.path == "/api/run":
+            elif parsed.path == "/api/run":
                 self.send_json({"job_id": start_job(payload.get("action", ""), payload)})
-            elif self.path == "/api/open":
+            elif parsed.path == "/api/open":
                 kind = payload.get("kind")
                 target = OUTPUT if kind == "output" else latest_output("*-gaming-pulse.html" if kind == "weekly" else "*-fresh-signals.md")
                 if not target:
                     raise ValueError("There is no report to open yet.")
                 subprocess.Popen(["open", str(target)])
                 self.send_json({"ok": True})
+            elif parsed.path == "/api/capture/pairing-code":
+                self.send_json(capture_store().create_pairing_code())
+            elif parsed.path == "/api/capture/preview":
+                store, _client = self.capture_client()
+                mission = store.mission(int(payload.get("job_id", 0)))
+                excerpt = str(payload.get("excerpt", "")).strip()
+                if not excerpt or len(excerpt) > 20_000:
+                    raise ValueError("Preview text must be between 1 and 20000 characters.")
+                matched = [term for term in mission["look_for"] if str(term).lower() in excerpt.lower()][:12]
+                self.send_json({"relevant": bool(matched), "matched_terms": matched, "mission": mission})
+            elif parsed.path == "/api/capture/pending":
+                store, client = self.capture_client()
+                permitted = {"job_id", "source_type", "url", "excerpt", "page_title", "author", "anonymize", "research_question", "researcher_note", "capture_mode", "metadata", "captured_at", "client_capture_id"}
+                values = {key: value for key, value in payload.items() if key in permitted}
+                if "anonymized" in payload:
+                    values["anonymize"] = payload["anonymized"] is not False
+                self.send_json(store.submit(client["client_id"], **values), 201)
+            elif parsed.path == "/api/capture/approve":
+                store, client = self.capture_client()
+                if payload.get("approved_by_user") is not True:
+                    raise ValueError("Explicit user approval is required before saving evidence.")
+                permitted = {"job_id", "source_type", "url", "excerpt", "page_title", "author", "anonymize", "research_question", "researcher_note", "capture_mode", "metadata", "captured_at", "client_capture_id"}
+                values = {key: value for key, value in payload.items() if key in permitted}
+                if "anonymized" in payload:
+                    values["anonymize"] = payload["anonymized"] is not False
+                client_capture_id = str(values.pop("client_capture_id", ""))
+                self.send_json(store.approve_direct(client["client_id"], client_capture_id=client_capture_id, **values), 201)
+            elif parsed.path.startswith("/api/capture/pending/") and parsed.path.endswith("/approve"):
+                store, client = self.capture_client()
+                if payload.get("approved_by_user") is not True:
+                    raise ValueError("Explicit user approval is required before saving evidence.")
+                capture_id = int(parsed.path.split("/")[4])
+                self.send_json(store.review(capture_id, approve=True, client_id=client["client_id"]))
+            elif parsed.path == "/api/capture/revoke":
+                store, client = self.capture_client()
+                store.revoke_client(client["client_id"])
+                self.send_json({"ok": True})
             else:
                 self.send_json({"error": "Not found"}, 404)
+        except PermissionError as exc:
+            self.send_json({"error": str(exc)}, 403)
+        except Exception as exc:
+            self.send_json({"error": friendly_error(str(exc))}, 400)
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        try:
+            store, client = self.capture_client()
+            if parsed.path == "/api/capture/pending":
+                query = dict(part.split("=", 1) for part in parsed.query.split("&") if "=" in part)
+                job_id = int(query["job_id"]) if query.get("job_id") else None
+                if job_id is None:
+                    raise ValueError("job_id is required when clearing pending captures.")
+                self.send_json(store.reject_pending(job_id, client_id=client["client_id"]))
+            elif parsed.path.startswith("/api/capture/pending/"):
+                capture_id = int(parsed.path.split("/")[4])
+                self.send_json(store.review(capture_id, approve=False, client_id=client["client_id"]))
+            elif parsed.path.startswith("/api/capture/evidence/"):
+                capture_id = int(parsed.path.split("/")[4])
+                self.send_json(store.delete_capture(capture_id, client["client_id"]))
+            else:
+                self.send_json({"error": "Not found"}, 404)
+        except PermissionError as exc:
+            self.send_json({"error": str(exc)}, 403)
         except Exception as exc:
             self.send_json({"error": friendly_error(str(exc))}, 400)
 
 
 def main() -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", CAPTURE_PORT), Handler)
+    except OSError as exc:
+        raise SystemExit(f"Research Oyster could not start because local port {CAPTURE_PORT} is already in use. Close the other local process and try again.") from exc
     url = f"http://127.0.0.1:{server.server_port}/"
-    print(f"Gaming Culture Pulse is open at {url}")
+    print(f"Research Oyster is open at {url}")
     threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:
         server.serve_forever()

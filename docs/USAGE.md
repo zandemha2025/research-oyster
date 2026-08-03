@@ -40,9 +40,10 @@ Resume work:
 4. Use the strongest relevant ready sources. Do not collect from a platform merely because it is available.
 5. Save material host-native findings with `add_evidence`.
 6. Use Oyster connectors for RSS, X, Discord, Twitch, Kick, Apify, and public web pages as appropriate.
-7. Seek independent confirmation and counterevidence.
-8. Call `get_research_dossier` and address or disclose important gaps.
-9. Separate observations, inferences, and recommendations; cite direct evidence URLs.
+7. For useful sources available only in the researcher's browser, call `get_browser_capture_mission`; the researcher selects the same job/question in the extension and approves relevant excerpts.
+8. Seek independent confirmation and counterevidence.
+9. Call `get_research_dossier` and address or disclose important gaps.
+10. Separate observations, inferences, and recommendations; cite direct evidence URLs.
 
 ## MCP tools
 
@@ -59,6 +60,18 @@ Resume work:
 - `connector_status`: report readiness and setup guidance without revealing secrets.
 - `list_research_jobs`: find resumable jobs.
 - `get_research_dossier`: return evidence, source coverage, and gaps.
+- `get_browser_capture_mission`: derive browser terms and questions from the original brief.
+
+## Supervised browser capture
+
+The extension has two collection actions:
+
+- **Selected text:** highlight one passage, right-click, and queue it for review.
+- **Find visible candidates:** explicitly scan up to 25 currently rendered passages in the visible viewport and queue only passages matching the mission terms.
+
+Neither action saves evidence immediately. The local review card shows the platform, page title, excerpt, and anonymization state. **Approve & save** sends that one candidate to the selected job; **Reject** and **Clear all** discard candidates locally. **Stop** blocks new selection and scan candidates until resumed.
+
+For the Kirkland example, the active capture mission might ask the researcher to look for holiday hosting, table presentation, non-alcoholic celebration, packaging, price, and Costco value. An approved Discord excerpt is stored as `source_type="discord"` with supervised-capture metadata, so it appears in the Kirkland dossier and satisfies the plan's Discord coverage without disguising how it was collected.
 
 ## Browser control center
 

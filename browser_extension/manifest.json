@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Research Oyster Capture",
+  "version": "0.1.0",
+  "description": "Supervised evidence capture for Research Oyster.",
+  "permissions": ["activeTab", "contextMenus", "storage", "scripting"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Research Oyster Capture",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+}

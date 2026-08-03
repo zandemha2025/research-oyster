@@ -4,6 +4,8 @@ Research Oyster is a local, source-agnostic research engine for Claude Code, Cod
 
 The repository also includes Gaming Culture Pulse, a browser control center and reporting workflow built on the same collection foundation.
 
+The optional **Research Oyster Capture** browser extension adds supervised evidence capture for Discord, X, Twitch chat, Reddit, and other pages a researcher can already access. Candidates stay in the extension until the user explicitly approves them; approved excerpts enter the original research job and dossier.
+
 ## What a user gives Oyster
 
 Only a subject and the decision the research should support are required:
@@ -23,6 +25,8 @@ Audience, market, time period, required platforms, exclusions, and output format
 7. Restart Claude Code or Codex.
 8. Ask your AI host: “Use Research Oyster to research …”
 
+To add supervised browser capture, open `chrome://extensions` or `edge://extensions`, enable Developer mode, choose **Load unpacked**, and select the repository's `browser_extension` folder. In Oyster's control center, create a one-time pairing code and enter it in the extension settings.
+
 The database is required. Every external connector is optional. The installer creates a local PostgreSQL database and isolated Python environment without replacing an existing `.env` file or database.
 
 For the complete beginner walkthrough, credential instructions, manual Linux setup, verification, and troubleshooting, read [docs/SETUP.md](docs/SETUP.md).
@@ -41,6 +45,7 @@ For the complete beginner walkthrough, credential instructions, manual Linux set
 | Twitch | Search arbitrary channels/topics | Twitch app credentials |
 | Kick | Search active streams/topics | Kick app credentials |
 | Host-native search | Save evidence found by Claude, Codex, or another tool | Whatever access that host uses |
+| Supervised browser capture | Review and approve visible excerpts into the active brief | Chrome/Edge extension and access to the page |
 
 No credential is required unless the corresponding source is selected. API/provider charges are separate from Oyster.
 
@@ -102,7 +107,7 @@ Generated results can be incomplete, outdated, biased, or incorrect. Verify mate
 
 ## Security model
 
-The included server uses local MCP stdio and the browser control center binds to `127.0.0.1`. Credentials are stored in the local `.env` file and are excluded from Git. This is not a production multi-user hosted service. Internet exposure requires authentication, tenant isolation, encrypted secret storage, rate limiting, audit logging, retention controls, and isolated collection workers.
+The included server uses local MCP stdio and the browser control center/capture API binds to `127.0.0.1:8765`. The extension pairs with a single-use code and a revocable token bound to its extension origin. Credentials are stored in the local `.env` file and are excluded from Git; the extension never receives them. This is not a production multi-user hosted service. Internet exposure requires authentication, tenant isolation, encrypted secret storage, rate limiting, audit logging, retention controls, and isolated collection workers.
 
 ## License
 

@@ -6,7 +6,7 @@ Research Oyster is provided for legitimate research using public information and
 
 You are responsible for complying with every applicable website and platform term, developer policy, API agreement, Actor/provider agreement, robots directive where applicable, rate limit, contractual restriction, and local law. Do not use Oyster to bypass authentication, paywalls, access controls, bans, CAPTCHAs, rate limits, bot restrictions, or other technical protections.
 
-Discord message collection requires an authorized bot installed in the relevant server with explicit channel permissions and any required intent. Never use a Discord user token or represent the bot as a human. Public invite metadata does not grant permission to collect private conversations.
+Automated Discord message collection requires an authorized bot installed in the relevant server with explicit channel permissions and any required intent. Supervised browser capture is different: a human deliberately selects or approves excerpts that are already visible through their ordinary access. Neither route permits user-token automation, hidden bulk scraping, access-control bypass, or collection from channels the researcher cannot normally view. Public invite metadata does not grant permission to collect private conversations, and ordinary access does not automatically grant permission to retain or republish them.
 
 An Apify token provides access to a platform, not blanket permission to collect every target. Review each Actor's code, owner, inputs, output handling, price, license, and target-site compliance before use. Official API access is preferable when it meets the research need.
 

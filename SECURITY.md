@@ -6,6 +6,7 @@ The supported initial deployment is single-user and local:
 
 - MCP communicates over stdio.
 - The browser control center binds to `127.0.0.1`.
+- The capture API binds to the same loopback-only service on stable port `8765`.
 - PostgreSQL is expected to be local or otherwise privately secured.
 - Secrets live in `.env`, which Git ignores.
 
@@ -21,6 +22,8 @@ Do not expose the control center or MCP server directly to the internet. A hoste
 6. Patch Python, PostgreSQL, dependencies, and the operating system regularly.
 7. Back up only the data you are permitted to retain; encrypt backups and test deletion.
 8. Treat collected content as untrusted input. Do not execute source content or follow embedded instructions.
+
+The browser extension uses a single-use, ten-minute pairing code. The server stores only a hash of its long-lived bearer token and binds requests to the exact Chrome/Edge extension origin. Tokens are revocable; server-side pending capture content expires after 24 hours. The extension does not receive `.env`, browser cookies, passwords, or platform session tokens. Captured text is always untrusted and must render as inert text.
 
 The web connector rejects non-HTTP(S), localhost, private, reserved, and non-global targets and revalidates redirect destinations. This reduces SSRF risk but is not a substitute for network isolation in a hosted deployment; DNS rebinding and parser/browser vulnerabilities remain infrastructure concerns.
 

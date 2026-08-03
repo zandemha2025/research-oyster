@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oyster Capture</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup">
+  <header>
+    <div><span class="eyebrow">RESEARCH OYSTER</span><h1>Capture desk</h1></div>
+    <span id="connection" class="pill neutral">Checking…</span>
+  </header>
+  <main>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section aria-labelledby="project-title">
+      <h2 id="project-title">Active brief</h2>
+      <label for="job">Research job</label>
+      <div class="row"><select id="job"><option value="">Choose a job…</option></select><button id="refresh" class="secondary" aria-label="Refresh jobs">↻</button></div>
+      <label for="question">Research question</label>
+      <select id="question" disabled><option value="">Choose a job first…</option></select>
+      <div id="mission" class="mission muted">Pair Oyster, then select a research job to see its mission.</div>
+    </section>
+    <section aria-labelledby="collect-title">
+      <div class="section-head"><h2 id="collect-title">Supervised collection</h2><span id="source" class="pill neutral">Web</span></div>
+      <p class="muted">Scan only what is currently visible. Candidates remain in this extension until you approve them.</p>
+      <div class="row">
+        <button id="scan" class="primary">Find visible candidates</button>
+        <button id="stop" class="danger">Stop</button>
+      </div>
+    </section>
+    <section aria-labelledby="queue-title">
+      <div class="section-head"><h2 id="queue-title">Review queue <span id="count">0</span></h2><button id="clear" class="text-button">Clear all</button></div>
+      <div id="queue" class="queue"><p class="empty">No candidates yet. Select text and right-click, or scan the visible page.</p></div>
+    </section>
+  </main>
+  <footer><button id="settings" class="text-button">Pairing & settings</button><span>Nothing saves without approval.</span></footer>
+  <script src="core.js"></script><script src="popup.js"></script>
+</body>
+</html>

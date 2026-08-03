@@ -61,6 +61,8 @@ Example: “Find consumer tensions and creative opportunities for a US Christmas
 - `get_research_dossier`: return the brief, plan, evidence, coverage, and gaps.
 - `list_research_jobs`: resume previous work.
 - `research_assignment` prompt: teach an MCP host the complete research loop.
+- `get_browser_capture_mission`: derive supervised browser terms and questions from the original job.
+- Research Oyster Capture extension: queue selected or currently visible evidence locally and promote only user-approved excerpts into the original dossier.
 
 ### Phase 2: autonomous discovery
 
@@ -109,7 +111,7 @@ Claude / Codex / platform
   RSS / X / host / later Reddit, Discord, web
 ```
 
-The MCP process must never log to stdout because stdio carries JSON-RPC. Diagnostics go to stderr. Local mode trusts the local user. Hosted mode requires OAuth, tenant-scoped authorization, SSRF controls, encrypted secrets, rate limits, and background workers before exposure.
+The MCP process must never log to stdout because stdio carries JSON-RPC. Diagnostics go to stderr. Local mode trusts the local user. The browser capture boundary separately requires loopback binding, one-time pairing, hashed revocable tokens, exact extension-origin checks, explicit approval, bounded visible-page scanning, and expiring pending content. Hosted mode requires OAuth, tenant-scoped authorization, SSRF controls, encrypted secrets, rate limits, and background workers before exposure.
 
 ## Definition of done for the first release
 

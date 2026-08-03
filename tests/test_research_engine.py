@@ -61,7 +61,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             {"create_research_job", "add_evidence", "fetch_rss", "search_x", "inspect_discord_invite",
              "run_apify_actor", "search_twitch", "search_kick", "read_discord_channel",
-             "crawl_web_page", "get_research_dossier", "list_research_jobs", "connector_status"},
+             "crawl_web_page", "get_research_dossier", "list_research_jobs", "connector_status", "get_browser_capture_mission"},
             names,
         )
 
