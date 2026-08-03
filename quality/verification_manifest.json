@@ -1,0 +1,24 @@
+{
+  "verified_at_utc": "2026-08-03T00:00:00Z",
+  "summary": {"user_stories": 52, "post_fix_status": "PASS", "open_defects": 0},
+  "runs": [
+    {
+      "name": "Python behavior suite",
+      "command": ".venv/bin/python -m unittest discover -s tests -v",
+      "result": "PASS",
+      "story_ids": ["SET-01","CLI-01","CLI-02","CLI-03","CLI-04","CLI-05","CLI-06","CLI-07","HTTP-01","HTTP-02","HTTP-03","RAW-02","RUN-01","RUN-02","DIS-01","DIS-02","DIS-03","DIS-04","TWI-01","TWI-02","TWI-03","TWI-04","KIC-01","KIC-02","KIC-03","PRS-01","PRS-02","PRS-03","PRS-04","PRS-06","REP-02","REP-07","REP-08","PUL-01","PUL-03"]
+    },
+    {
+      "name": "Postgres integration suite",
+      "command": ".venv/bin/python tests/postgres_acceptance.py",
+      "result": "PASS",
+      "story_ids": ["SET-02","SET-03","RAW-01","RAW-03","RUN-03","PRS-05","REP-01","REP-03","REP-04","REP-05","REP-06","PUL-02","RPL-01","RPL-02"]
+    },
+    {
+      "name": "Static safety and CLI error-path suite",
+      "command": "static acceptance commands documented in session evidence",
+      "result": "PASS",
+      "story_ids": ["SEC-01","SEC-02","OPS-01"]
+    }
+  ]
+}

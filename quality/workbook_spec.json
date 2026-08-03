@@ -1,0 +1,55 @@
+{
+  "output": "outputs/gaming-culture-pulse-feature-tracker.xlsx",
+  "canonical": true,
+  "sheets": [
+    {
+      "name": "Summary",
+      "purpose": "Formula-driven totals by status, priority, and product area with generated timestamp and zero-open-defect callout.",
+      "formula_requirements": [
+        "Total stories references User Stories table row count",
+        "Passing stories uses COUNTIF on Final Status",
+        "Open defects uses COUNTIFS on Defect Log phase and fix status",
+        "Coverage percentage divides passing stories by total stories with zero handling"
+      ]
+    },
+    {
+      "name": "User Stories",
+      "source": "quality/user_stories.json",
+      "columns": ["Story ID","Area","Priority","Feature","User Story","Expected Behavior","Evidence","Final Status","Last Tested UTC","Notes"],
+      "validation": {"Priority":["P0","P1","P2","P3"],"Final Status":["Not Tested","Pass","Fail","Blocked"]},
+      "freeze": {"rows":1,"columns":3},
+      "table_name": "UserStoriesTable"
+    },
+    {
+      "name": "Defect Log",
+      "source": "quality/test_runs.json",
+      "columns": ["Story ID","Phase","Result","Severity","Error","Fix Status","Evidence"],
+      "validation": {"Result":["PASS","FAIL"],"Fix Status":["Open","Fixed","Verified"]},
+      "freeze": {"rows":1,"columns":2},
+      "table_name": "DefectLogTable"
+    },
+    {
+      "name": "Verification Runs",
+      "source": "quality/verification_manifest.json",
+      "columns": ["Run","Command","Result","Stories Covered","Story IDs"],
+      "table_name": "VerificationRunsTable"
+    }
+  ],
+  "style": {
+    "title_fill": "#17324D",
+    "header_fill": "#24557A",
+    "header_font": "#FFFFFF",
+    "pass_fill": "#DCFCE7",
+    "fail_fill": "#FEE2E2",
+    "blocked_fill": "#FEF3C7",
+    "body_font": "Aptos",
+    "hide_gridlines": true,
+    "wrap_descriptive_columns": true
+  },
+  "verification": [
+    "Inspect Summary and top rows of all source sheets",
+    "Scan workbook for formula errors",
+    "Render every sheet and visually inspect clipping, wrapping, hierarchy, and status colors",
+    "Export exactly one xlsx file"
+  ]
+}

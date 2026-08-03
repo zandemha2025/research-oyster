@@ -1,0 +1,13 @@
+[
+  {"slug":"minecraft","display_name":"Minecraft","publisher":"Mojang Studios","aliases":["Minecraft"]},
+  {"slug":"fortnite","display_name":"Fortnite","publisher":"Epic Games","aliases":["Fortnite"]},
+  {"slug":"valorant","display_name":"Valorant","publisher":"Riot Games","aliases":["Valorant"]},
+  {"slug":"league-of-legends","display_name":"League of Legends","publisher":"Riot Games","aliases":["League of Legends","LoL"]},
+  {"slug":"marvel-rivals","display_name":"Marvel Rivals","publisher":"NetEase Games","aliases":["Marvel Rivals"]},
+  {"slug":"call-of-duty","display_name":"Call of Duty","publisher":"Activision","aliases":["Call of Duty","Warzone"]},
+  {"slug":"apex-legends","display_name":"Apex Legends","publisher":"Electronic Arts","aliases":["Apex Legends"]},
+  {"slug":"rocket-league","display_name":"Rocket League","publisher":"Epic Games","aliases":["Rocket League"]},
+  {"slug":"genshin-impact","display_name":"Genshin Impact","publisher":"HoYoverse","aliases":["Genshin Impact"]},
+  {"slug":"warframe","display_name":"Warframe","publisher":"Digital Extremes","aliases":["Warframe"]}
+]
+

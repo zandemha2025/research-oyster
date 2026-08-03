@@ -1,0 +1,13 @@
+[
+  {"invite_code": "minecraft", "title_slug": "minecraft"},
+  {"invite_code": "fortnite", "title_slug": "fortnite"},
+  {"invite_code": "valorant", "title_slug": "valorant"},
+  {"invite_code": "leagueoflegends", "title_slug": "league-of-legends"},
+  {"invite_code": "marvelrivals", "title_slug": "marvel-rivals"},
+  {"invite_code": "callofduty", "title_slug": "call-of-duty"},
+  {"invite_code": "apexlegends", "title_slug": "apex-legends"},
+  {"invite_code": "rocketleague", "title_slug": "rocket-league"},
+  {"invite_code": "genshinimpact", "title_slug": "genshin-impact"},
+  {"invite_code": "warframe", "title_slug": "warframe"}
+]
+

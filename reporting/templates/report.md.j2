@@ -1,0 +1,45 @@
+# Gaming Culture Pulse
+
+Week: {{ week_start }} through {{ week_end }}. Generated: {{ generated_at }}. Data coverage: {{ coverage_line }}.{% if baseline %} Baseline report. Week over week comparisons are not available.{% endif %}
+
+## Movers
+
+{% if movers %}{% for mover in movers %}
+### {{ mover.title }}
+
+{% for source, signal in mover.signals %}{% if source == 'Discord' %}Discord mean presence was {{ signal.delta|change }} week over week, a change of {{ signal.absolute_change|counted('member') }} online to {{ signal.value|counted('member') }} online.{% elif source in ('Twitch', 'Kick') %}{{ source }} mean sampled viewership was {{ signal.delta|change }} week over week, a change of {{ signal.absolute_change|counted('viewer') }} to {{ signal.value|counted('viewer') }}.{% else %}Press coverage was {{ signal.delta|change }} week over week, a change of {{ signal.absolute_change|counted('article') }} to {{ signal.value|counted('article') }}.{% endif %}{% if not loop.last %} {% endif %}{% endfor %}
+{% endfor %}{% else %}No title moved in the same direction across two or more measured sources this week.
+{% endif %}
+## Top IP categories by live viewership
+
+| Rank | Title | Twitch mean viewers | Twitch week over week | Kick mean viewers | Kick week over week |
+|---:|---|---:|---:|---:|---:|
+{% for row in streams %}| {{ loop.index }} | {{ row.title }} | {{ row.twitch.value|number if row.twitch else '' }} | {{ row.twitch|movement }} | {{ row.kick.value|number if row.kick else '' }} | {{ row.kick|movement }} |
+{% endfor %}{% if not streams %}|  | No collected data |  |  |  |  |
+{% endif %}
+## Discord community activity
+
+| Server | Title | Mean presence | Week over week | Member count |
+|---|---|---:|---:|---:|
+{% for row in discord %}| {{ row.server or row.title }} | {{ row.title }} | {{ row.value|counted('member') }} online | {{ row|movement }} | {{ row.member_count|counted('registered member') }} |
+{% endfor %}{% if not discord %}| No collected data |  |  |  |  |
+{% endif %}
+## Press volume
+
+| Title | Article count | Week over week change | Outlets covering |
+|---|---:|---:|---:|
+{% for row in press %}| {{ row.title }} | {{ row.value|counted('article') }} | {{ row|movement }} | {{ row.outlets|counted('outlet') }} |
+{% endfor %}{% if not press %}| No matched coverage | 0 articles |  | 0 outlets |
+{% endif %}
+## Meme and trend watch
+
+{% if memes %}{% for item in memes %}- [{{ item.headline }}]({{ item.url }}) from {{ item.display_name }}.
+{% endfor %}{% else %}No meme-source entries were collected this week.
+{% endif %}
+## Methodology and limitations
+
+Discord activity is the weekly mean of approximate members online. Streaming values are weekly means sampled daily at {{ sampling_hour }}:00 UTC. Twitch category totals reflect the top 1,000 live channels and undercount the long tail. Kick totals reflect up to {{ kick_limit }} active channels returned by the cursor-paginated public API. Press counts use canonical URLs and case-insensitive configured title aliases. Week over week means this report week compared with the preceding seven-day UTC period. Titles moving in the same direction across at least two sources receive an agreement flag. No composite score is calculated.
+
+{% if unavailable %}Unavailable sources this week: {{ unavailable|join(', ') }}.{% else %}No configured source is marked unavailable.{% endif %}
+
+Coverage by collector: {{ coverage_line }}. Week over week movement is withheld when either comparison week has fewer than {{ coverage_threshold }} complete collection days.

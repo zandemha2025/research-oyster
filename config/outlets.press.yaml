@@ -1,0 +1,10 @@
+[
+  {"slug": "ign", "display_name": "IGN", "homepage": "https://www.ign.com", "source_class": "news"},
+  {"slug": "gamespot", "display_name": "GameSpot", "homepage": "https://www.gamespot.com", "source_class": "news"},
+  {"slug": "polygon", "display_name": "Polygon", "homepage": "https://www.polygon.com", "source_class": "news"},
+  {"slug": "kotaku", "display_name": "Kotaku", "homepage": "https://kotaku.com", "source_class": "news"},
+  {"slug": "aftermath", "display_name": "Aftermath", "homepage": "https://aftermath.site", "source_class": "news"},
+  {"slug": "remap", "display_name": "Remap", "homepage": "https://remapradio.com", "source_class": "news"},
+  {"slug": "know-your-meme", "display_name": "Know Your Meme", "homepage": "https://knowyourmeme.com", "source_class": "meme"}
+]
+
