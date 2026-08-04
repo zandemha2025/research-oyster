@@ -25,6 +25,26 @@ Do not expose the control center or MCP server directly to the internet. A hoste
 
 The browser extension uses a single-use, ten-minute pairing code. The server stores only a hash of its long-lived bearer token and binds requests to the exact Chrome/Edge extension origin. Tokens are revocable; server-side pending capture content expires after 24 hours. The extension does not receive `.env`, browser cookies, passwords, or platform session tokens. Captured text is always untrusted and must render as inert text.
 
+### Approved-session browser traffic capture
+
+Beyond selecting and scanning visible text, the extension can capture the network payloads a page itself receives — but only inside an explicit session:
+
+- An agent calls `request_browser_traffic_session(job_id, domain, reason)`. This only creates a *request*; nothing is captured yet.
+- The researcher must approve that request once, per domain, in the extension popup. Approval is a second, independent consent on top of Chrome's own host-permission prompt for the domain.
+- An approved session is scoped to a single public domain, capped in payload size, bounded to at most thirty minutes, and stoppable at any time from either the extension or the control center. Unapproved requests expire in ten minutes.
+- The server re-validates every submission against the `capture_sessions` table: an `approved_session` capture is rejected unless a live, approved session for that client, job, and domain exists. Extension-side checks are convenience only; the boundary is server-side, and every request/approve/decline/stop/expire event is written to the capture audit log.
+- The recorder runs in the page's own context and reads only response bodies the page already received. It never reads cookies, request headers, passwords, or session tokens. Because the page already controls its own network payloads, a page that forged the internal capture message would gain no capability it did not already have; the server still enforces the domain, session, and size limits.
+- Captured payloads are stored redacted in `raw_responses`; the evidence row keeps only a bounded summary, never the raw body.
+
+### Standing per-domain consent
+
+To remove the per-session click without becoming an unattended scraper, a researcher can trust a domain once:
+
+- Trusting a domain requires the extension's Bearer token **and** `approved_by_user: true`, plus Chrome's own host-permission prompt for that domain — the same double consent as a single session, paid once.
+- Trust is stored per browser client, is revocable at any time, and every trust/untrust and every auto-approved session is written to the capture audit log (auto-approvals carry `standing_consent: true`).
+- A trusted domain only lets the extension **auto-approve session requests and start recording on tabs the user already has open** on that domain. It never opens or navigates tabs, never runs headless, and never captures while collection is stopped. Each auto-approved session still has its own 30-minute TTL and Stop control, and the server re-validates every submission against a live session.
+- This is a convenience over an action the authenticated client is already permitted to perform (approving its own sessions); it does not widen what can be captured, only how often the human must click.
+
 The web connector rejects non-HTTP(S), localhost, private, reserved, and non-global targets and revalidates redirect destinations. This reduces SSRF risk but is not a substitute for network isolation in a hosted deployment; DNS rebinding and parser/browser vulnerabilities remain infrastructure concerns.
 
 ## Reporting a vulnerability

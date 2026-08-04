@@ -64,6 +64,13 @@ def _safe_response_content(kind: str, content: bytes) -> bytes:
     return json.dumps(scrub(value), separators=(",", ":")).encode()
 
 
+# Public aliases so the research engine reuses this redaction logic without importing
+# underscore-prefixed names. Redaction lives here in one place.
+SECRET_KEYS = _SECRET_KEYS
+redacted_headers = _redacted_headers
+safe_response_content = _safe_response_content
+
+
 class RequestFailed(RuntimeError):
     pass
 

@@ -19,6 +19,28 @@ This Chrome/Edge Manifest V3 extension creates a supervised bridge between pages
 
 The adapters recognize visible content on Discord, X, Twitch, Kick, Reddit, and generic webpages. Page-reading code is injected only after the user clicks **Find visible candidates**; it is not a persistent all-sites content script. Website layout changes can prevent an adapter from finding content; selected-text capture remains the reliable fallback.
 
+## Approved-session traffic capture
+
+Some evidence lives in the JSON a page loads over the network rather than in the rendered text. For those cases the AI host can request a capture session, and the extension records the page's own responses — but only after you agree, and only within tight bounds.
+
+1. The host calls `request_browser_traffic_session(job_id, domain, reason)`. A request card appears under **Traffic capture requests** in the popup showing the domain, the reason, and the job. Nothing is recorded yet.
+2. Click **Approve (30 min)**. This triggers a second, separate Chrome prompt asking for permission to run on that domain — you must accept both. Declining either records nothing.
+3. While the session is active, browse the approved domain normally. The extension reads only response bodies the page itself receives, extracts message-like text, and saves it to the job. It never reads cookies, request headers, passwords, or session tokens.
+4. Sessions are scoped to one domain, capped in size and count, and end automatically after thirty minutes. Use **Stop recording** in the popup (or the control center) to end one immediately. An unapproved request expires in ten minutes.
+
+The server independently re-checks every submission against the approved session; the extension's checks are convenience, not the security boundary. Approved-session capture may violate a platform's terms of service and can put your account at risk — you are responsible for confirming a site is permitted for your purpose. See the repository `DISCLAIMER.md` and `SECURITY.md`.
+
+### Standing per-domain consent (approve once)
+
+If you don't want to approve every session, trust a domain once — in the extension **settings** page, or by ticking **Always capture this domain** when you approve a session:
+
+1. Trusting a domain asks for Chrome's host permission for that domain (a second consent) and records the standing consent with Oyster.
+2. After that, when the agent requests a session for that domain, the extension **auto-approves it and starts recording on tabs you already have open there** — no click. It never opens or navigates pages for you and never runs headless.
+3. Each auto-started session still has a 30-minute limit and a **Stop** control, and everything is audited.
+4. Remove a trusted domain any time in settings; unpairing clears them all.
+
+This is a convenience over approving your own sessions — it does not widen what can be captured, and capture still happens only in your signed-in browser on pages you open.
+
 ## Expected local API
 
 The service must listen only on loopback. The extension rejects remote and HTTPS configuration values by design because the initial local service contract is plain HTTP.
@@ -29,6 +51,14 @@ The service must listen only on loopback. The extension rejects remote and HTTPS
 | `GET` | `/api/capture/jobs` | Return `{jobs: [{id, title}]}` or an array of jobs. |
 | `GET` | `/api/capture/jobs/{id}/mission` | Return the original `brief`, `research_questions`, and `look_for` terms. |
 | `POST` | `/api/capture/approve` | Atomically persist an approved capture. Requires `approved_by_user: true` and an idempotent `client_capture_id`. |
+| `GET` | `/api/capture/sessions` | List traffic-capture session requests for the paired client. |
+| `POST` | `/api/capture/sessions/{id}/approve` | Approve a session. Requires `approved_by_user: true`; optional `ttl_minutes` (max 30). |
+| `POST` | `/api/capture/sessions/{id}/decline` | Decline a pending session request. |
+| `POST` | `/api/capture/sessions/{id}/stop` | Stop an active session immediately. |
+| `GET` | `/api/capture/trusted-domains` | List domains this client has given standing consent to. |
+| `POST` | `/api/capture/trusted-domains` | Trust a domain. Requires `approved_by_user: true`. |
+| `DELETE` | `/api/capture/trusted-domains/{domain}` | Revoke standing consent for a domain. |
+| `POST` | `/api/capture/sessions/auto-approve` | Approve all requested sessions on this client's trusted domains. |
 
 All authenticated endpoints use `Authorization: Bearer <pairing token>`. The API should enforce Origin allowlisting for the installed extension ID, constant-time token comparison, request/body limits, capture rate limits, job authorization, token revocation, and audit events. It must not return platform credentials to the browser.
 

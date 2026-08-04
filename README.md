@@ -14,7 +14,17 @@ Only a subject and the decision the research should support are required:
 
 Audience, market, time period, required platforms, exclusions, and output format are optional. Oyster recommends relevant sources and creates source-specific queries. It does not force Twitch or Discord into research where they add no value.
 
-## Fastest setup on macOS
+## Fastest setup (one line)
+
+On macOS or Linux, paste this into a terminal:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | bash
+```
+
+It downloads Oyster, installs Python and PostgreSQL if they are missing, creates and migrates a local database, attaches Oyster to Claude Code / Codex, and opens the control center. It is safe to re-run and never overwrites an existing `.env` or database. (macOS needs [Homebrew](https://brew.sh); the script tells you if it is missing.) Then restart your AI host and ask: “Use Research Oyster to research …”.
+
+## Manual setup on macOS
 
 1. Download or clone this repository.
 2. Double-click `Install Gaming Pulse.command`.
@@ -46,6 +56,9 @@ For the complete beginner walkthrough, credential instructions, manual Linux set
 | Kick | Search active streams/topics | Kick app credentials |
 | Host-native search | Save evidence found by Claude, Codex, or another tool | Whatever access that host uses |
 | Supervised browser capture | Review and approve visible excerpts into the active brief | Chrome/Edge extension and access to the page |
+| Approved-session browser traffic | Capture the network payloads a page you approve already receives, one domain at a time | Chrome/Edge extension, page access, and an explicit per-domain approval |
+
+Every research job can be exported to a folder under `output/` containing a readable report (Markdown and HTML), the raw evidence as `evidence.json` and `evidence.csv`, and the redacted network payloads collected during the run as `raw_responses.jsonl`. Ask the host to export, or use the **Research jobs** panel in the control center. When a connector is not configured, Oyster returns the next fallback to try rather than a dead error, so a research run finishes with the evidence it could gather plus clear instructions for unlocking the rest.
 
 No credential is required unless the corresponding source is selected. API/provider charges are separate from Oyster.
 

@@ -2,6 +2,23 @@
 
 This guide starts from a new computer and ends with a working Research Oyster MCP connection.
 
+## Fastest: one-line installer (macOS or Linux)
+
+Paste this into a terminal:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | bash
+```
+
+It downloads Oyster, installs Python and PostgreSQL if they are missing, creates and migrates the local database, attaches Oyster to Claude Code / Codex, and opens the control center. It is safe to re-run and never overwrites an existing `.env` or database.
+
+- macOS needs [Homebrew](https://brew.sh) first; the script tells you if it is missing.
+- Install location defaults to `~/research-oyster`; override with `OYSTER_HOME=/path`.
+- After it finishes, restart your AI host and ask: “Use Research Oyster to research …”.
+- For supervised browser capture, load `~/research-oyster/browser_extension` once via Chrome/Edge → Extensions → Developer mode → Load unpacked.
+
+The manual routes below do the same steps by hand if you prefer.
+
 ## Option A: one-click macOS installation
 
 ### 1. Get the project

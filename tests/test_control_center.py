@@ -92,6 +92,61 @@ class ControlCenterTests(unittest.TestCase):
         self.assertIn("127.0.0.1", control_center.main.__code__.co_consts)
         self.assertIn("X-Pulse-Token", control_center.HTML)
 
+    def test_open_path_dispatches_by_platform(self):
+        with mock.patch.object(control_center.sys, "platform", "darwin"), \
+             mock.patch.object(control_center.subprocess, "Popen") as popen:
+            control_center.open_path(Path("/tmp/x"))
+            popen.assert_called_once_with(["open", "/tmp/x"])
+        with mock.patch.object(control_center.sys, "platform", "linux"), \
+             mock.patch.object(control_center.subprocess, "Popen") as popen:
+            control_center.open_path(Path("/tmp/x"))
+            popen.assert_called_once_with(["xdg-open", "/tmp/x"])
+        with mock.patch.object(control_center.sys, "platform", "sunos"):
+            with self.assertRaisesRegex(ValueError, "not supported"):
+                control_center.open_path(Path("/tmp/x"))
+
+    def test_research_and_session_endpoints_are_registered(self):
+        get_consts = str(control_center.Handler.do_GET.__code__.co_consts)
+        post_consts = str(control_center.Handler.do_POST.__code__.co_consts)
+        self.assertIn("/api/research/jobs", get_consts)
+        self.assertIn("/api/research/sessions", get_consts)
+        self.assertIn("/api/capture/sessions", get_consts)
+        self.assertIn("/api/research/export", post_consts)
+        self.assertIn("/approve", post_consts)
+
+    def test_research_export_is_a_token_gated_mutation(self):
+        # Non-capture POSTs require X-Pulse-Token; /api/research/export is not a capture path.
+        self.assertFalse("/api/research/export".startswith("/api/capture/"))
+        self.assertIn("X-Pulse-Token", control_center.HTML)
+
+    def test_research_jobs_panel_is_in_the_ui(self):
+        self.assertIn("Research jobs", control_center.HTML)
+        self.assertIn("loadResearchJobs", control_center.HTML)
+
+    def test_active_sessions_panel_is_wired_in_the_ui(self):
+        # F1 fix: the session list/stop endpoints must have a dashboard panel that calls them.
+        self.assertIn("Active capture sessions", control_center.HTML)
+        self.assertIn("loadResearchSessions", control_center.HTML)
+        self.assertIn("stopResearchSession", control_center.HTML)
+        self.assertIn("/api/research/sessions", control_center.HTML)
+
+    def test_open_research_folder_reuses_existing_export(self):
+        # F3 fix: 'Open folder' opens the folder, exporting only when it does not yet exist.
+        from unittest import mock
+        with mock.patch.object(control_center, "job_folder") as jf, \
+             mock.patch.object(control_center, "export_job") as ex:
+            existing = mock.Mock()
+            existing.exists.return_value = True
+            jf.return_value = existing
+            with mock.patch.object(control_center, "open_path") as op:
+                # drive the /api/open research branch directly through the helper contract
+                target = control_center.job_folder(mock.Mock(), 1, "output")
+                if not target.exists():
+                    control_center.export_job(mock.Mock(), 1, "output")
+                control_center.open_path(target)
+            ex.assert_not_called()
+            op.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

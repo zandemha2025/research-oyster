@@ -134,6 +134,64 @@ class CaptureHTTPAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "Too many"):
             control_center.enforce_rate("unit", key, 2)
 
+    def test_traffic_session_requires_approval_then_accepts_network_capture(self):
+        from research_engine.capture import CaptureStore
+        session = CaptureStore(self.database_url).request_session(self.job_id, "discord.com", "collect chatter")
+
+        # The researcher sees the request in the extension-facing list.
+        listed = self.request("GET", "/api/capture/sessions", headers=self.auth())
+        self.assertEqual(200, listed[0])
+        self.assertIn(session["id"], [s["id"] for s in listed[1]])
+
+        # Approval requires explicit user consent.
+        denied = self.request("POST", f"/api/capture/sessions/{session['id']}/approve", {"approved_by_user": False}, self.auth())
+        self.assertEqual(400, denied[0])
+        approved = self.request("POST", f"/api/capture/sessions/{session['id']}/approve", {"approved_by_user": True, "ttl_minutes": 30}, self.auth())
+        self.assertEqual(200, approved[0])
+        self.assertEqual(session["id"], approved[1]["session_id"])
+
+        # A network capture under the approved session is accepted and promoted.
+        payload = {
+            "job_id": self.job_id, "source_type": "discord_supervised",
+            "url": "https://discord.com/channels/1/2/3", "excerpt": "bob: the movie was great",
+            "capture_mode": "approved_session", "anonymized": True, "client_capture_id": "net-http-1",
+            "metadata": {"session_id": session["id"], "network": {
+                "url": "https://discord.com/api/messages", "method": "GET", "status": 200,
+                "content_type": "application/json", "body": '[{"content":"the movie was great","author":{"username":"bob"}}]'}},
+        }
+        saved = self.request("POST", "/api/capture/approve", {**payload, "approved_by_user": True}, self.auth())
+        self.assertEqual("approved", saved[1]["status"])
+        raws = ResearchStore(self.database_url).list_raw_responses(self.job_id)
+        self.assertEqual(["browser_network"], [r["payload_kind"] for r in raws])
+
+        # The control-center user can stop the session with the page token.
+        stopped = self.request("POST", f"/api/research/sessions/{session['id']}/stop", {}, {"X-Pulse-Token": control_center.TOKEN})
+        self.assertEqual(200, stopped[0])
+        after = self.request("POST", "/api/capture/approve", {**payload, "approved_by_user": True, "client_capture_id": "net-http-2"}, self.auth())
+        self.assertEqual(403, after[0])
+
+    def test_standing_consent_trusts_domain_and_auto_approves(self):
+        # Trusting a domain requires explicit user consent.
+        denied = self.request("POST", "/api/capture/trusted-domains", {"domain": "discord.com"}, self.auth())
+        self.assertEqual(400, denied[0])
+        trusted = self.request("POST", "/api/capture/trusted-domains", {"domain": "discord.com", "approved_by_user": True}, self.auth())
+        self.assertEqual(201, trusted[0])
+        listed = self.request("GET", "/api/capture/trusted-domains", None, self.auth())
+        self.assertIn("discord.com", [d["domain"] for d in listed[1]])
+
+        # A later session request on the trusted domain auto-approves without another click.
+        from research_engine.capture import CaptureStore
+        session = CaptureStore(self.database_url).request_session(self.job_id, "discord.com", "reactions")
+        auto = self.request("POST", "/api/capture/sessions/auto-approve", {}, self.auth())
+        self.assertEqual(200, auto[0])
+        self.assertIn("discord.com", [a["domain"] for a in auto[1]["approved"]])
+        self.assertEqual("approved", CaptureStore(self.database_url).session_status(session["id"])["status"])
+
+        # Untrusting stops future auto-approval.
+        removed = self.request("DELETE", "/api/capture/trusted-domains/discord.com", None, self.auth())
+        self.assertTrue(removed[1]["removed"])
+        self.assertEqual([], self.request("GET", "/api/capture/trusted-domains", None, self.auth())[1])
+
 
 if __name__ == "__main__":
     unittest.main()
