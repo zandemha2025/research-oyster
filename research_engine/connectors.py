@@ -45,7 +45,7 @@ async def fetch_rss(store: ResearchStore, job_id: int, feed_url: str, query_term
         response = await client.get(feed_url)
         response.raise_for_status()
     _validate_public_url(str(response.url))
-    parsed = feedparser.loads(response.content)
+    parsed = feedparser.parse(response.content)
     terms = [term.lower() for term in query_terms if term.strip()]
     stored = []
     for entry in parsed.entries[: max(1, min(limit, 200))]:
