@@ -1,3 +1,4 @@
+import os
 import tempfile
 import subprocess
 import unittest
@@ -43,7 +44,10 @@ class ControlCenterTests(unittest.TestCase):
             output = Path(directory)
             older, newer = output / "old-fresh-signals.md", output / "new-fresh-signals.md"
             older.write_text("old"); newer.write_text("new")
-            older.touch(); newer.touch()
+            # Set explicit, distinct mtimes: consecutive touch() calls can land in the same
+            # filesystem mtime tick on fast runners, making the "newest" ambiguous.
+            os.utime(older, (1_000_000, 1_000_000))
+            os.utime(newer, (2_000_000, 2_000_000))
             with mock.patch.object(control_center, "OUTPUT", output):
                 self.assertEqual(newer, control_center.latest_output("*-fresh-signals.md"))
 
