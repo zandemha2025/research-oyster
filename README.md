@@ -14,7 +14,17 @@ Only a subject and the decision the research should support are required:
 
 Audience, market, time period, required platforms, exclusions, and output format are optional. Oyster recommends relevant sources and creates source-specific queries. It does not force Twitch or Discord into research where they add no value.
 
-## Fastest setup on macOS
+## Fastest setup (one line)
+
+On macOS or Linux, paste this into a terminal:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | bash
+```
+
+It downloads Oyster, installs Python and PostgreSQL if they are missing, creates and migrates a local database, attaches Oyster to Claude Code / Codex, and opens the control center. It is safe to re-run and never overwrites an existing `.env` or database. (macOS needs [Homebrew](https://brew.sh); the script tells you if it is missing.) Then restart your AI host and ask: “Use Research Oyster to research …”.
+
+## Manual setup on macOS
 
 1. Download or clone this repository.
 2. Double-click `Install Gaming Pulse.command`.
