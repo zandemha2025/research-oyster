@@ -57,11 +57,12 @@ def _gaps(dossier: dict[str, Any]) -> list[dict[str, Any]]:
     gaps = []
     for source in dossier.get("gaps", []):
         guide = CONNECTOR_GUIDES.get(SOURCE_TO_CONNECTOR.get(source, source), {})
-        gaps.append({
-            "source": source,
-            "setup": guide.get("setup", ""),
-            "fallbacks": guide.get("fallbacks", []),
-        })
+        setup = guide.get("setup", "")
+        fallbacks = guide.get("fallbacks", [])
+        # Always-ready sources (rss, web) need no credentials, so they carry no setup or
+        # fallbacks. Surface their scope as guidance instead of leaving a bare heading.
+        note = "" if (setup or fallbacks) else (guide.get("scope") or "This source needs no setup — collect it directly.")
+        gaps.append({"source": source, "setup": setup, "fallbacks": fallbacks, "note": note})
     return gaps
 
 
@@ -70,6 +71,19 @@ def _csv_safe(value: Any) -> str:
     if text[:1] in {"=", "+", "-", "@"}:  # spreadsheet formula-injection guard
         text = "'" + text
     return text
+
+
+def job_folder(store: ResearchStore, job_id: int, output_dir: Path | str = Path("output")) -> Path:
+    """Compute a job's export folder path without writing anything.
+
+    Used by the control center's 'Open folder' so it can open an existing export instead
+    of regenerating every file on each click.
+    """
+    job = store.dossier(job_id)["job"]
+    base = Path(output_dir)
+    if not base.is_absolute():
+        base = PROJECT_ROOT / base
+    return base / f"research-job-{job_id}-{_slug(job.get('brief', ''))}"
 
 
 def export_job(store: ResearchStore, job_id: int, output_dir: Path | str = Path("output")) -> dict[str, Any]:

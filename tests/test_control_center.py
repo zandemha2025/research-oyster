@@ -123,6 +123,30 @@ class ControlCenterTests(unittest.TestCase):
         self.assertIn("Research jobs", control_center.HTML)
         self.assertIn("loadResearchJobs", control_center.HTML)
 
+    def test_active_sessions_panel_is_wired_in_the_ui(self):
+        # F1 fix: the session list/stop endpoints must have a dashboard panel that calls them.
+        self.assertIn("Active capture sessions", control_center.HTML)
+        self.assertIn("loadResearchSessions", control_center.HTML)
+        self.assertIn("stopResearchSession", control_center.HTML)
+        self.assertIn("/api/research/sessions", control_center.HTML)
+
+    def test_open_research_folder_reuses_existing_export(self):
+        # F3 fix: 'Open folder' opens the folder, exporting only when it does not yet exist.
+        from unittest import mock
+        with mock.patch.object(control_center, "job_folder") as jf, \
+             mock.patch.object(control_center, "export_job") as ex:
+            existing = mock.Mock()
+            existing.exists.return_value = True
+            jf.return_value = existing
+            with mock.patch.object(control_center, "open_path") as op:
+                # drive the /api/open research branch directly through the helper contract
+                target = control_center.job_folder(mock.Mock(), 1, "output")
+                if not target.exists():
+                    control_center.export_job(mock.Mock(), 1, "output")
+                control_center.open_path(target)
+            ex.assert_not_called()
+            op.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

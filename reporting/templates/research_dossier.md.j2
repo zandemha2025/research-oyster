@@ -39,4 +39,5 @@ Every recommended source produced evidence. No gaps remain.
 ### {{ gap.source | cell }}
 {% if gap.setup %}- **Set up:** {{ gap.setup | cell }}
 {% endif %}{% for fallback in gap.fallbacks %}- **Fallback:** {{ fallback | cell }}
-{% endfor %}{% endfor %}
+{% endfor %}{% if gap.note %}- {{ gap.note | cell }}
+{% endif %}{% endfor %}

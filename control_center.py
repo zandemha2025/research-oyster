@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 
 from db.queries import connect, migrate
 from research_engine.capture import CaptureStore
-from research_engine.export import export_job
+from research_engine.export import export_job, job_folder
 from research_engine.store import ResearchStore
 from settings import Settings
 
@@ -271,6 +271,7 @@ button,.button{font:inherit;font-weight:650;border:0;border-radius:10px;padding:
 <section class="grid"><div class="panel"><h2>System check</h2><div id="checks"></div><button onclick="refresh()">Check again</button></div>
 <div class="panel"><h2>Your reports</h2><p id="reportText">No reports found yet.</p><div class="links"><button id="weekly" onclick="openFile('weekly')" disabled>Open weekly report</button><button id="fresh" onclick="openFile('fresh')" disabled>Open fresh brief</button><button onclick="openFile('output')">Open output folder</button></div></div>
 <div class="panel"><h2>Research jobs</h2><p class="muted">Export any research job to a folder with a readable report, the raw evidence (JSON + CSV), and the captured network payloads.</p><div id="researchJobs"><p class="muted">Loading…</p></div></div>
+<div class="panel"><h2>Active capture sessions</h2><p class="muted">Approved browser traffic capture sessions. You can stop any session here; it also stops automatically when it expires.</p><div id="researchSessions"><p class="muted">None active.</p></div></div>
 <div class="panel pairing"><h2>Supervised browser capture</h2><p>Pair the Oyster extension to save approved excerpts from pages you can already access. Oyster never receives browser cookies or passwords.</p><button id="pairButton" onclick="createPairingCode()">Create one-time pairing code</button><div id="pairCode" class="paircode" aria-live="polite"><span class="muted">Local service</span><code id="captureAddress">http://127.0.0.1:8765</code><span class="muted">Pairing code — expires in 10 minutes</span><code id="captureCode"></code></div></div>
 <div class="panel"><h2>How capture feeds research</h2><p>Select an active brief in the extension. Oyster turns that brief into a capture mission, keeps candidates in review, and promotes only approved captures into the original dossier.</p><p class="muted">Best-effort name redaction is on by default; review every excerpt. Only capture material you are authorized to view and retain.</p></div></section>
 </main>
@@ -286,7 +287,7 @@ button,.button{font:inherit;font-weight:650;border:0;border-radius:10px;padding:
 <script>
 const token='__TOKEN__';let state={};
 async function api(path,body){const opt=body?{method:'POST',headers:{'Content-Type':'application/json','X-Pulse-Token':token},body:JSON.stringify(body)}:{};const r=await fetch(path,opt);const data=await r.json();if(!r.ok)throw new Error(data.error||'Request failed');return data}
-async function refresh(){state=await api('/api/status');document.getElementById('headline').textContent=state.ready?'Your system is ready':'Setup needs attention';document.getElementById('headline').className=state.ready?'ready':'notready';document.getElementById('subline').textContent=state.ready?'You can collect fresh signals or create reports.':'Open Setup to finish connecting the database.';document.getElementById('checks').innerHTML=state.checks.map(c=>`<div class="check"><span>${c.name}</span><span class="${c.ok?'ok':c.optional?'muted':'bad'}">${c.ok?'✓':c.optional?'—':'○'} ${c.detail}</span></div>`).join('');document.getElementById('weekly').disabled=!state.latest_weekly;document.getElementById('fresh').disabled=!state.latest_fresh;document.getElementById('reportText').textContent=state.latest_weekly?`Latest weekly report: ${state.latest_weekly}`:'No weekly report has been created yet.';loadResearchJobs()}
+async function refresh(){state=await api('/api/status');document.getElementById('headline').textContent=state.ready?'Your system is ready':'Setup needs attention';document.getElementById('headline').className=state.ready?'ready':'notready';document.getElementById('subline').textContent=state.ready?'You can collect fresh signals or create reports.':'Open Setup to finish connecting the database.';document.getElementById('checks').innerHTML=state.checks.map(c=>`<div class="check"><span>${c.name}</span><span class="${c.ok?'ok':c.optional?'muted':'bad'}">${c.ok?'✓':c.optional?'—':'○'} ${c.detail}</span></div>`).join('');document.getElementById('weekly').disabled=!state.latest_weekly;document.getElementById('fresh').disabled=!state.latest_fresh;document.getElementById('reportText').textContent=state.latest_weekly?`Latest weekly report: ${state.latest_weekly}`:'No weekly report has been created yet.';loadResearchJobs();loadResearchSessions()}
 async function run(action){if(!state.ready&&action!=='setup'){openSetup();return}showJob(action==='pulse'?'Collecting fresh signals':action==='collect'?'Collecting today’s data':'Creating weekly report','Working. Keep this window open.','running');try{const payload={action,week_start:state.week_start};if(action==='pulse')payload.sources=state.available_sources;const x=await api('/api/run',payload);poll(x.job_id)}catch(e){showJob('Could not start',e.message,'failed')}}
 async function poll(id){const x=await api('/api/job?id='+id);showJob(x.status==='running'?'Working...':x.status==='success'?'Done':'Needs attention',x.message,x.status,x.details);if(x.status==='running')setTimeout(()=>poll(id),1000);else refresh()}
 function showJob(title,msg,status,details=''){const e=document.getElementById('job');e.className='job show '+status;document.getElementById('jobTitle').textContent=title;document.getElementById('jobMessage').textContent=msg;document.getElementById('jobDetails').textContent=details||'No additional details.'}
@@ -296,6 +297,9 @@ async function openFile(kind){await api('/api/open',{kind})}
 async function loadResearchJobs(){try{const jobs=await api('/api/research/jobs');const el=document.getElementById('researchJobs');if(!jobs.length){el.innerHTML='<p class="muted">No research jobs yet. Ask your AI host to use Research Oyster.</p>';return}el.innerHTML=jobs.map(j=>`<div class="check"><span>#${j.id} ${(j.brief||'').slice(0,60)}<br><span class="muted">${j.status} · ${(j.created_at||'').slice(0,10)}</span></span><span class="links"><button onclick="exportResearch(${j.id})">Export report</button><button onclick="openResearch(${j.id})">Open folder</button></span></div>`).join('')}catch(e){document.getElementById('researchJobs').innerHTML=`<p class="bad">${e.message}</p>`}}
 async function exportResearch(id){showJob('Exporting research report','Writing report and raw evidence to a folder…','running');try{const x=await api('/api/research/export',{job_id:id});showJob('Report exported',`${x.evidence_count} evidence items and ${x.raw_count} raw payloads written to ${x.folder}`,'success')}catch(e){showJob('Could not export',e.message,'failed')}}
 async function openResearch(id){try{await api('/api/open',{kind:'research',job_id:id})}catch(e){showJob('Could not open folder',e.message,'failed')}}
+async function loadResearchSessions(){try{const s=await api('/api/research/sessions');const el=document.getElementById('researchSessions');const open=s.filter(x=>x.status==='approved'||x.status==='requested');if(!open.length){el.innerHTML='<p class="muted">None active.</p>';return}el.innerHTML=open.map(x=>`<div class="check"><span>${escapeHtml(x.domain)}<br><span class="muted">job ${escapeHtml(x.job_id)} · ${escapeHtml(x.status)}${x.expires_at?' · ends '+escapeHtml(String(x.expires_at).slice(11,16)):''}</span></span><span class="links"><button onclick="stopResearchSession(${x.id})">Stop</button></span></div>`).join('')}catch(e){document.getElementById('researchSessions').innerHTML=`<p class="bad">${e.message}</p>`}}
+async function stopResearchSession(id){try{await api('/api/research/sessions/'+id+'/stop',{});await loadResearchSessions()}catch(e){showJob('Could not stop session',e.message,'failed')}}
+function escapeHtml(v){const d=document.createElement('div');d.textContent=String(v==null?'':v);return d.innerHTML}
 async function createPairingCode(){if(!state.ready){openSetup();return}try{const x=await api('/api/capture/pairing-code',{});document.getElementById('captureCode').textContent=x.pairing_code;document.getElementById('pairCode').classList.add('show');document.getElementById('pairButton').textContent='Create a new code'}catch(e){showJob('Could not create pairing code',e.message,'failed')}}
 refresh();
 </script></body></html>'''
@@ -476,8 +480,10 @@ class Handler(BaseHTTPRequestHandler):
                 kind = payload.get("kind")
                 if kind == "research":
                     job_id = int(payload.get("job_id", 0))
-                    result = export_job(ResearchStore(Settings().database_url), job_id, Settings().output_dir)
-                    target = Path(result["folder"])
+                    store = ResearchStore(Settings().database_url)
+                    target = job_folder(store, job_id, Settings().output_dir)
+                    if not target.exists():  # export on first open; later opens reuse the folder
+                        export_job(store, job_id, Settings().output_dir)
                 elif kind == "output":
                     target = OUTPUT
                 else:

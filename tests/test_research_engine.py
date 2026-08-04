@@ -202,6 +202,27 @@ class ExportTests(unittest.TestCase):
             self.assertIsInstance(json.loads(folder.joinpath("evidence.json").read_text()), list)
             self.assertIn("X_BEARER_TOKEN", folder.joinpath("report.md").read_text())
 
+    def test_always_ready_source_gap_has_guidance_not_empty_heading(self):
+        # F2 fix: an rss/web gap (no credentials) must render a guidance line, not a bare heading.
+        import tempfile
+        from pathlib import Path
+        from research_engine.store import ResearchStore
+        from research_engine.export import export_job, job_folder
+
+        store = ResearchStore(self.database_url)
+        plan = build_plan("Always-ready gap guidance regression brief", decision="ship")
+        job_id = store.create_job("Always-ready gap guidance regression brief", "ship", "", "", plan)["job_id"]
+        store.add_evidence(job_id, source_type="reddit", url="https://r/1", title="t", excerpt="only reddit", author="u")
+        with tempfile.TemporaryDirectory() as directory:
+            result = export_job(store, job_id, Path(directory))
+            md = Path(result["folder"]).joinpath("report.md").read_text()
+            i = md.find("### rss")
+            self.assertNotEqual(-1, i)
+            block = md[i:i + 80]
+            self.assertIn("fetch_rss", block)  # guidance present, not an empty heading
+            # job_folder returns the same path without writing when called separately
+            self.assertEqual(Path(result["folder"]), job_folder(store, job_id, Path(directory)))
+
 
 if __name__ == "__main__":
     unittest.main()
