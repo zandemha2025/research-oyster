@@ -8,6 +8,8 @@ You are responsible for complying with every applicable website and platform ter
 
 Automated Discord message collection requires an authorized bot installed in the relevant server with explicit channel permissions and any required intent. Supervised browser capture is different: a human deliberately selects or approves excerpts that are already visible through their ordinary access. Neither route permits user-token automation, hidden bulk scraping, access-control bypass, or collection from channels the researcher cannot normally view. Public invite metadata does not grant permission to collect private conversations, and ordinary access does not automatically grant permission to retain or republish them.
 
+Approved-session traffic capture records the network responses a page you are viewing already receives, but only after you explicitly approve a time-limited session for one named domain. This is a convenience over copying text by hand from pages you can already access — it is not permission to automate a platform. Many platforms, including Discord and X, restrict or prohibit automated collection of their API responses in their terms of service, and using it can put your account at risk. You are responsible for confirming that capturing a given site is permitted for your purpose, for keeping sessions narrow and short, and for retaining only what you are authorized to keep. Do not use it to bypass a platform's technical or contractual protections.
+
 An Apify token provides access to a platform, not blanket permission to collect every target. Review each Actor's code, owner, inputs, output handling, price, license, and target-site compliance before use. Official API access is preferable when it meets the research need.
 
 ## Privacy and human impact

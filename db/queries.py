@@ -66,6 +66,7 @@ def insert_raw_response(
     conn: Any, *, run_id: int | None, collector: str, payload_kind: str,
     method: str, url: str, request_headers: dict[str, str], status: int,
     response_headers: dict[str, str], content: bytes, parser_version: str,
+    research_job_id: int | None = None,
 ) -> int:
     """Persist immutable response evidence and commit it before parsing begins."""
     text = content.decode("utf-8", errors="replace")
@@ -76,11 +77,11 @@ def insert_raw_response(
     with conn.cursor() as cur:
         cur.execute(
             """INSERT INTO raw_responses
-               (run_id, collector, payload_kind, request_method, request_url,
+               (run_id, research_job_id, collector, payload_kind, request_method, request_url,
                 request_headers, response_status, response_headers, body, body_text,
                 body_hash, parser_version)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-            (run_id, collector, payload_kind, method, url, json_value(request_headers),
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (run_id, research_job_id, collector, payload_kind, method, url, json_value(request_headers),
              status, json_value(response_headers), json_value(body) if body is not None else None,
              body_text, hashlib.sha256(content).hexdigest(), parser_version),
         )

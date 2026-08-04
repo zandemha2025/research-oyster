@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -9,9 +10,12 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from db.queries import connect, json_value
+from research_engine.raw_log import record_raw_parts
 
 
 PAIRING_TTL_MINUTES = 10
+SESSION_REQUEST_TTL_MINUTES = 10
+SESSION_MAX_TTL_MINUTES = 30
 MAX_EXCERPT_LENGTH = 20_000
 CAPTURE_MODES = {"manual", "supervised", "approved_session"}
 SOURCE_FAMILIES = {"discord", "x", "twitch", "kick", "reddit", "web", "rss"}
@@ -21,6 +25,33 @@ _EXTENSION_ID = re.compile(r"^[a-p]{32}$")
 
 def _hash_secret(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _normalize_domain(value: str) -> str:
+    """Reduce a user/agent-supplied domain to a bare public hostname or reject it.
+
+    Rejects schemes, paths, ports, IP literals, and localhost so a session can only ever
+    scope to a real public host such as 'discord.com'.
+    """
+    raw = (value or "").strip().lower()
+    if not raw or "/" in raw or ":" in raw or " " in raw:
+        raise ValueError("Provide a bare domain such as discord.com, without scheme, port, or path.")
+    if raw in {"localhost"} or raw.endswith(".local"):
+        raise ValueError("Local hostnames cannot be captured.")
+    try:
+        ipaddress.ip_address(raw)
+        raise ValueError("Provide a domain name, not an IP address.")
+    except ValueError as exc:
+        if "not an IP address" in str(exc) or "Provide a domain" in str(exc):
+            raise
+    if "." not in raw or len(raw) < 4 or len(raw) > 253:
+        raise ValueError("Provide a valid public domain such as discord.com.")
+    return raw
+
+
+def _host_in_domain(host: str, domain: str) -> bool:
+    host = (host or "").lower()
+    return host == domain or host.endswith(f".{domain}")
 
 
 def allowed_local_origin(origin: str, extension_id: str = "") -> bool:
@@ -340,9 +371,49 @@ class CaptureStore:
             cur.execute("SELECT 1 FROM browser_clients WHERE id=%s AND revoked_at IS NULL", (client_id,))
             if not cur.fetchone():
                 raise PermissionError("Browser client is invalid or revoked.")
-            metadata = {**(capture.get("metadata") or {}), "submitted_source_type": source_label,
+            incoming_meta = dict(capture.get("metadata") or {})
+            capture_mode = str(capture.get("capture_mode", "manual"))
+            # Consent gate: an approved_session capture is only accepted while an approved,
+            # unexpired session for this client/job covers the captured URL's domain.
+            session_cap = MAX_EXCERPT_LENGTH
+            if capture_mode == "approved_session":
+                session_id = incoming_meta.get("session_id")
+                host = urlparse(url).hostname or ""
+                session_row = None
+                if session_id:
+                    cur.execute(
+                        """SELECT * FROM capture_sessions
+                           WHERE id=%s AND status='approved' AND client_id=%s AND job_id=%s
+                             AND expires_at > now() FOR UPDATE""",
+                        (int(session_id), client_id, job_id),
+                    )
+                    session_row = cur.fetchone()
+                if not session_row or not _host_in_domain(host, session_row["domain"]):
+                    raise PermissionError("No approved capture session covers this domain.")
+                session_cap = session_row["max_payload_bytes"]
+            # Network payloads are promoted to raw_responses (redacted) and reduced to a
+            # bounded summary in the evidence metadata, so the evidence row never carries
+            # a large or unredacted body.
+            network = incoming_meta.pop("network", None)
+            if isinstance(network, dict):
+                body = network.get("body", "")
+                body_bytes = body.encode("utf-8", "replace") if isinstance(body, str) else bytes(body or b"")
+                body_bytes = body_bytes[:session_cap]
+                raw_id = record_raw_parts(
+                    self.database_url, job_id, "browser.approved_session", "browser_network",
+                    method=str(network.get("method", "GET")), url=str(network.get("url", url)),
+                    status=int(network.get("status", 0) or 0),
+                    response_headers={"Content-Type": str(network.get("content_type", ""))},
+                    content=body_bytes, conn=conn,
+                )
+                incoming_meta["network"] = {
+                    "url": str(network.get("url", url)), "method": str(network.get("method", "GET")),
+                    "status": int(network.get("status", 0) or 0),
+                    "content_type": str(network.get("content_type", "")), "raw_response_id": raw_id,
+                }
+            metadata = {**incoming_meta, "submitted_source_type": source_label,
                         "client_capture_id": key, "captured_at": captured.isoformat() if captured else None,
-                        "capture_mode": capture.get("capture_mode", "manual"), "research_question": question,
+                        "capture_mode": capture_mode, "research_question": question,
                         "researcher_note": capture.get("researcher_note", ""), "supervised_capture": True,
                         "anonymized": anonymize}
             cur.execute(
@@ -429,3 +500,151 @@ class CaptureStore:
             )
             rows = cur.fetchall()
         return [{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in row.items()} for row in rows]
+
+    # --- Consent-gated browser traffic capture sessions -------------------------------
+
+    @staticmethod
+    def _session_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in row.items()}
+
+    def _audit_session(self, cur: Any, session_id: int, client_id: int | None, event: str, details: dict[str, Any]) -> None:
+        cur.execute(
+            "INSERT INTO browser_capture_audit (client_id,event_type,details) VALUES (%s,%s,%s)",
+            (client_id, event, json_value({"session_id": session_id, **details})),
+        )
+
+    def expire_sessions(self) -> int:
+        """Expire unapproved requests past their request TTL and approved sessions past expiry."""
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE capture_sessions SET status='expired', ended_at=now()
+                   WHERE (status='requested' AND created_at < now() - make_interval(mins => %s))
+                      OR (status='approved' AND expires_at IS NOT NULL AND expires_at <= now())
+                   RETURNING id, client_id""",
+                (SESSION_REQUEST_TTL_MINUTES,),
+            )
+            rows = cur.fetchall()
+            for row in rows:
+                self._audit_session(cur, row["id"], row["client_id"], "session.expired", {})
+            conn.commit()
+        return len(rows)
+
+    def request_session(self, job_id: int, domain: str, reason: str, requested_by: str = "agent",
+                        max_payload_bytes: int = 131072) -> dict[str, Any]:
+        domain = _normalize_domain(domain)
+        reason = reason.strip()
+        if not reason or len(reason) > 1000:
+            raise ValueError("Give a short reason (1-1000 characters) for the capture session.")
+        cap = max(1024, min(int(max_payload_bytes), 1_048_576))
+        self.expire_sessions()
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT status FROM research_jobs WHERE id=%s", (job_id,))
+            job = cur.fetchone()
+            if not job:
+                raise ValueError(f"Research job {job_id} was not found.")
+            if job["status"] != "active":
+                raise ValueError("Traffic sessions can only be requested for an active research job.")
+            cur.execute(
+                """SELECT id FROM capture_sessions
+                   WHERE job_id=%s AND domain=%s AND status IN ('requested','approved') LIMIT 1""",
+                (job_id, domain),
+            )
+            if cur.fetchone():
+                raise ValueError(f"A capture session for {domain} on job {job_id} is already open.")
+            cur.execute(
+                """INSERT INTO capture_sessions (job_id,domain,reason,requested_by,max_payload_bytes)
+                   VALUES (%s,%s,%s,%s,%s) RETURNING *""",
+                (job_id, domain, reason, requested_by.strip()[:60] or "agent", cap),
+            )
+            row = cur.fetchone()
+            self._audit_session(cur, row["id"], None, "session.requested", {"domain": domain, "job_id": job_id})
+            conn.commit()
+        return self._session_row(row)
+
+    def list_sessions(self, client_id: int | None = None, job_id: int | None = None) -> list[dict[str, Any]]:
+        self.expire_sessions()
+        where = ["status IN ('requested','approved')"]
+        params: list[Any] = []
+        if job_id is not None:
+            where.append("job_id=%s")
+            params.append(job_id)
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute(f"SELECT * FROM capture_sessions WHERE {' AND '.join(where)} ORDER BY created_at DESC", params)
+            rows = cur.fetchall()
+        return [self._session_row(row) for row in rows]
+
+    def session_status(self, session_id: int) -> dict[str, Any]:
+        self.expire_sessions()
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT * FROM capture_sessions WHERE id=%s", (session_id,))
+            row = cur.fetchone()
+        if not row:
+            raise ValueError("Capture session was not found.")
+        return self._session_row(row)
+
+    def approve_session(self, session_id: int, client_id: int, ttl_minutes: int = SESSION_MAX_TTL_MINUTES) -> dict[str, Any]:
+        ttl = max(1, min(int(ttl_minutes), SESSION_MAX_TTL_MINUTES))
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM browser_clients WHERE id=%s AND revoked_at IS NULL", (client_id,))
+            if not cur.fetchone():
+                raise PermissionError("Browser client is invalid or revoked.")
+            cur.execute(
+                """UPDATE capture_sessions
+                   SET status='approved', client_id=%s, approved_at=now(),
+                       expires_at=now() + make_interval(mins => %s)
+                   WHERE id=%s AND status='requested'
+                   RETURNING *""",
+                (client_id, ttl, session_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("Capture session is not awaiting approval.")
+            self._audit_session(cur, session_id, client_id, "session.approved",
+                                {"domain": row["domain"], "job_id": row["job_id"], "ttl_minutes": ttl})
+            conn.commit()
+        result = self._session_row(row)
+        return {"session_id": result["id"], "job_id": result["job_id"], "domain": result["domain"],
+                "expires_at": result["expires_at"], "max_payload_bytes": result["max_payload_bytes"]}
+
+    def decline_session(self, session_id: int, client_id: int) -> dict[str, Any]:
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE capture_sessions SET status='declined', client_id=%s, ended_at=now() WHERE id=%s AND status='requested' RETURNING *",
+                (client_id, session_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("Capture session is not awaiting approval.")
+            self._audit_session(cur, session_id, client_id, "session.declined", {"domain": row["domain"]})
+            conn.commit()
+        return {"session_id": session_id, "status": "declined"}
+
+    def stop_session(self, session_id: int, client_id: int | None = None) -> dict[str, Any]:
+        """Stop an open session. The local control-center user may stop without a client id."""
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE capture_sessions SET status='stopped', ended_at=now() WHERE id=%s AND status IN ('requested','approved') RETURNING *",
+                (session_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("Capture session is not open.")
+            self._audit_session(cur, session_id, client_id if client_id is not None else row["client_id"],
+                                "session.stopped", {"domain": row["domain"]})
+            conn.commit()
+        return {"session_id": session_id, "status": "stopped"}
+
+    def active_session(self, client_id: int, job_id: int, host: str) -> dict[str, Any] | None:
+        self.expire_sessions()
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT * FROM capture_sessions
+                   WHERE status='approved' AND client_id=%s AND job_id=%s
+                     AND expires_at > now() ORDER BY approved_at DESC""",
+                (client_id, job_id),
+            )
+            rows = cur.fetchall()
+        for row in rows:
+            if _host_in_domain(host, row["domain"]):
+                return self._session_row(row)
+        return None

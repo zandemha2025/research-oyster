@@ -29,6 +29,12 @@
         <button id="stop" class="danger">Stop</button>
       </div>
     </section>
+    <section aria-labelledby="sessions-title">
+      <h2 id="sessions-title">Traffic capture requests</h2>
+      <p class="muted">Oyster is asking to capture network data on a page you approve. Nothing is recorded until you approve, and only for the one domain and time window shown.</p>
+      <div id="sessionRequests"></div>
+      <div id="activeSession" hidden></div>
+    </section>
     <section aria-labelledby="queue-title">
       <div class="section-head"><h2 id="queue-title">Review queue <span id="count">0</span></h2><button id="clear" class="text-button">Clear all</button></div>
       <div id="queue" class="queue"><p class="empty">No candidates yet. Select text and right-click, or scan the visible page.</p></div>

@@ -11,7 +11,118 @@ import ipaddress
 import socket
 from urllib.parse import urljoin, urlparse
 
+from research_engine.raw_log import record_raw, record_raw_parts
 from research_engine.store import ResearchStore
+
+
+# Single source of truth for connector readiness and, crucially, what to do when a
+# connector is not configured. Every unconfigured connector returns an ordered list of
+# fallbacks so the AI host walks to the next door instead of giving up. connector_status()
+# and not_configured() both read from here so guidance never drifts between the two.
+CONNECTOR_GUIDES: dict[str, dict[str, Any]] = {
+    "apify": {
+        "enables": ["Reddit", "X scraping alternative", "web/community discovery", "arbitrary Actors"],
+        "setup": "Paste APIFY_TOKEN in Setup.",
+        "fallbacks": [
+            "crawl_web_page on the relevant public pages",
+            "fetch_rss on topic or community feeds",
+            "get_browser_capture_mission for pages only the researcher can open",
+        ],
+    },
+    "x_official": {
+        "setup": "Paste X_BEARER_TOKEN in Setup; X charges per API usage.",
+        "fallbacks": [
+            "run_apify_actor with an X/Twitter scraper Actor",
+            "crawl_web_page on public posts or news coverage",
+            "get_browser_capture_mission for the researcher's own X session",
+        ],
+    },
+    "twitch": {
+        "setup": "Add a Twitch developer Client ID and Client Secret in Setup.",
+        "fallbacks": [
+            "run_apify_actor with a Twitch channel or clips scraper Actor",
+            "crawl_web_page on public stats pages such as twitchtracker.com or sullygnome.com",
+            "get_browser_capture_mission for pages the researcher can open",
+        ],
+    },
+    "kick": {
+        "setup": "Add a Kick developer Client ID and Client Secret in Setup.",
+        "fallbacks": [
+            "crawl_web_page on public kick.com category and channel pages",
+            "run_apify_actor with a generic web scraper Actor",
+            "get_browser_capture_mission for pages the researcher can open",
+        ],
+    },
+    "discord_public": {
+        "scope": "Invite discovery and public member/activity metadata via inspect_discord_invite.",
+    },
+    "discord_messages": {
+        "setup": "Install your Discord bot in each server and grant View Channel, Read Message History, and the Message Content intent.",
+        "fallbacks": [
+            "inspect_discord_invite for public community size and activity metadata",
+            "get_browser_capture_mission for supervised capture inside a server the researcher has already joined",
+            "run_apify_actor with a community-content Actor",
+        ],
+    },
+    "rss": {
+        "scope": "Any public RSS or Atom URL via fetch_rss.",
+    },
+    "self_hosted_web": {
+        "engine": "Scrapling",
+        "scope": "Readable text and links from any public page via crawl_web_page.",
+        "fallbacks": [
+            "run_apify_actor when a page needs browser interaction or blocks direct collection",
+            "get_browser_capture_mission for pages behind a login the researcher holds",
+        ],
+    },
+    "supervised_browser_capture": {
+        "scope": "User-approved excerpts and, within an approved session, network payloads from pages the researcher can already access.",
+        "setup": "Start the control center, load the browser_extension folder in Chrome or Edge, and pair it with a one-time code.",
+        "boundary": "Candidates stay local until the user approves; Oyster never receives browser cookies or passwords.",
+    },
+}
+
+
+# Predicate per connector over a Settings-shaped object. Connectors that are always ready
+# (rss, discord_public, self_hosted_web, supervised_browser_capture) are omitted and default True.
+READY_CHECKS: dict[str, Any] = {
+    "apify": lambda s: bool(s.apify_token),
+    "x_official": lambda s: bool(s.x_bearer_token),
+    "twitch": lambda s: bool(s.twitch_client_id and s.twitch_client_secret),
+    "kick": lambda s: bool(s.kick_client_id and s.kick_client_secret),
+    "discord_messages": lambda s: bool(s.discord_bot_token),
+}
+
+
+# Maps a dossier gap (a source_type in research_evidence) to the connector guide that unlocks it.
+SOURCE_TO_CONNECTOR: dict[str, str] = {
+    "x": "x_official",
+    "reddit": "apify",
+    "twitch": "twitch",
+    "kick": "kick",
+    "discord": "discord_messages",
+    "web": "self_hosted_web",
+    "rss": "rss",
+}
+
+
+def not_configured(connector: str) -> dict[str, Any]:
+    """Structured 'try the next door' response returned when a connector lacks credentials.
+
+    The AI host is instructed to try `fallbacks` in order rather than stop. This is a
+    normal return value, not an exception, precisely so a missing credential never reads
+    as a hard failure.
+    """
+    guide = CONNECTOR_GUIDES.get(connector, {})
+    fallbacks = guide.get("fallbacks", [])
+    return {
+        "not_configured": True,
+        "connector": connector,
+        "error": f"{connector} is not configured.",
+        "setup": guide.get("setup", ""),
+        "fallbacks": fallbacks,
+        "next_step": fallbacks[0] if fallbacks else "",
+    }
 
 
 def _validate_public_url(url: str) -> None:
@@ -43,6 +154,7 @@ async def fetch_rss(store: ResearchStore, job_id: int, feed_url: str, query_term
     _validate_public_url(feed_url)
     async with httpx.AsyncClient(timeout=30, follow_redirects=True, headers={"User-Agent": "ResearchOyster/0.1"}) as client:
         response = await client.get(feed_url)
+        raw_id = record_raw(store.database_url, job_id, "research.rss", "rss_feed", response)
         response.raise_for_status()
     _validate_public_url(str(response.url))
     parsed = feedparser.parse(response.content)
@@ -59,12 +171,12 @@ async def fetch_rss(store: ResearchStore, job_id: int, feed_url: str, query_term
             query=" OR ".join(query_terms), metadata={"feed_url": feed_url},
         )
         stored.append({**result, "title": title, "url": str(entry.get("link", feed_url))})
-    return {"feed_url": feed_url, "matched": len(stored), "items": stored}
+    return {"feed_url": feed_url, "matched": len(stored), "items": stored, "raw_response_id": raw_id}
 
 
 async def search_x(store: ResearchStore, job_id: int, bearer_token: str, query: str, max_results: int = 25) -> dict[str, Any]:
     if not bearer_token:
-        raise ValueError("X is not configured. Set X_BEARER_TOKEN in .env, then restart the MCP server.")
+        return not_configured("x_official")
     params = {
         "query": query, "max_results": max(10, min(max_results, 100)),
         "tweet.fields": "created_at,author_id,conversation_id,lang,public_metrics",
@@ -72,6 +184,7 @@ async def search_x(store: ResearchStore, job_id: int, bearer_token: str, query: 
     }
     async with httpx.AsyncClient(timeout=30, headers={"Authorization": f"Bearer {bearer_token}", "User-Agent": "ResearchOyster/0.1"}) as client:
         response = await client.get("https://api.x.com/2/tweets/search/recent", params=params)
+        raw_id = record_raw(store.database_url, job_id, "research.x", "x_search", response)
         response.raise_for_status()
         payload = response.json()
     users = {user["id"]: user for user in payload.get("includes", {}).get("users", [])}
@@ -85,7 +198,7 @@ async def search_x(store: ResearchStore, job_id: int, bearer_token: str, query: 
             query=query, metadata={"post_id": post["id"], "metrics": post.get("public_metrics", {}), "conversation_id": post.get("conversation_id")},
         )
         stored.append({**result, "url": url, "author": f"@{username}", "text": post.get("text", "")})
-    return {"query": query, "matched": len(stored), "items": stored, "meta": payload.get("meta", {})}
+    return {"query": query, "matched": len(stored), "items": stored, "meta": payload.get("meta", {}), "raw_response_id": raw_id}
 
 
 async def inspect_discord_invite(store: ResearchStore, job_id: int, invite_url_or_code: str) -> dict[str, Any]:
@@ -97,6 +210,7 @@ async def inspect_discord_invite(store: ResearchStore, job_id: int, invite_url_o
     url = f"https://discord.com/api/v10/invites/{code}"
     async with httpx.AsyncClient(timeout=30, headers={"User-Agent": "ResearchOyster/0.1"}) as client:
         response = await client.get(url, params={"with_counts": "true", "with_expiration": "true"})
+        raw_id = record_raw(store.database_url, job_id, "research.discord", "discord_invite", response)
         if response.status_code == 404:
             raise ValueError("That Discord invite is invalid or expired.")
         response.raise_for_status()
@@ -110,13 +224,13 @@ async def inspect_discord_invite(store: ResearchStore, job_id: int, invite_url_o
         job_id, source_type="discord", url=f"https://discord.gg/{code}", title=name, excerpt=excerpt,
         metadata={"invite_code": code, "guild_id": guild.get("id"), "member_count": members, "presence_count": online},
     )
-    return {**result, "invite_code": code, "guild_name": name, "member_count": members, "presence_count": online}
+    return {**result, "invite_code": code, "guild_name": name, "member_count": members, "presence_count": online, "raw_response_id": raw_id}
 
 
 async def run_apify_actor(store: ResearchStore, job_id: int, token: str, actor_id: str,
                           actor_input: dict[str, Any], source_type: str, limit: int = 100) -> dict[str, Any]:
     if not token:
-        raise ValueError("Apify is not configured. Paste APIFY_TOKEN in Setup, then restart the MCP host.")
+        return not_configured("apify")
     actor = actor_id.strip().replace("/", "~")
     if not actor:
         raise ValueError("Choose an Apify Actor ID, such as owner/actor-name.")
@@ -124,6 +238,7 @@ async def run_apify_actor(store: ResearchStore, job_id: int, token: str, actor_i
     clamped_limit = max(1, min(limit, 1000))
     async with httpx.AsyncClient(timeout=300, headers={"Authorization": f"Bearer {token}", "User-Agent": "ResearchOyster/0.1"}) as client:
         response = await client.post(url, params={"clean": "true", "limit": clamped_limit}, json=actor_input)
+        raw_id = record_raw(store.database_url, job_id, "research.apify", "apify_dataset", response)
         response.raise_for_status()
         rows = response.json()
     stored = []
@@ -135,19 +250,21 @@ async def run_apify_actor(store: ResearchStore, job_id: int, token: str, actor_i
         result = store.add_evidence(job_id, source_type=source_type, url=target, title=title, excerpt=excerpt,
                                     metadata={"actor_id": actor_id, "record": row})
         stored.append({**result, "url": target, "title": title})
-    return {"actor_id": actor_id, "received": len(rows), "stored": len(stored), "items": stored}
+    return {"actor_id": actor_id, "received": len(rows), "stored": len(stored), "items": stored, "raw_response_id": raw_id}
 
 
 async def search_twitch(store: ResearchStore, job_id: int, client_id: str, client_secret: str,
                         query: str, limit: int = 40) -> dict[str, Any]:
     if not client_id or not client_secret:
-        raise ValueError("Twitch is not configured. Add its Client ID and Client Secret in Setup.")
+        return not_configured("twitch")
     async with httpx.AsyncClient(timeout=30) as client:
         token_response = await client.post("https://id.twitch.tv/oauth2/token", params={"client_id": client_id, "client_secret": client_secret, "grant_type": "client_credentials"})
+        record_raw(store.database_url, job_id, "research.twitch", "oauth_token", token_response)
         token_response.raise_for_status()
         headers = {"Authorization": f"Bearer {token_response.json()['access_token']}", "Client-Id": client_id}
         response = await client.get("https://api.twitch.tv/helix/search/channels", headers=headers,
                                     params={"query": query, "live_only": "false", "first": max(1, min(limit, 100))})
+        raw_id = record_raw(store.database_url, job_id, "research.twitch", "twitch_search_channels", response)
         response.raise_for_status()
         rows = response.json().get("data", [])
     stored = []
@@ -157,21 +274,23 @@ async def search_twitch(store: ResearchStore, job_id: int, client_id: str, clien
         result = store.add_evidence(job_id, source_type="twitch", url=url, title=row.get("display_name", ""), excerpt=excerpt,
                                     query=query, metadata=row)
         stored.append({**result, "url": url, **row})
-    return {"query": query, "matched": len(stored), "items": stored}
+    return {"query": query, "matched": len(stored), "items": stored, "raw_response_id": raw_id}
 
 
 async def search_kick(store: ResearchStore, job_id: int, client_id: str, client_secret: str,
                       query: str, pages: int = 3) -> dict[str, Any]:
     if not client_id or not client_secret:
-        raise ValueError("Kick is not configured. Add its Client ID and Client Secret in Setup.")
+        return not_configured("kick")
     async with httpx.AsyncClient(timeout=30) as client:
         token_response = await client.post("https://id.kick.com/oauth/token", data={"client_id": client_id, "client_secret": client_secret, "grant_type": "client_credentials"})
+        record_raw(store.database_url, job_id, "research.kick", "oauth_token", token_response)
         token_response.raise_for_status()
         headers = {"Authorization": f"Bearer {token_response.json()['access_token']}"}
-        rows, cursor = [], None
+        rows, cursor, raw_id = [], None, None
         for _ in range(max(1, min(pages, 10))):
             params = {"limit": 1000, **({"cursor": cursor} if cursor else {})}
             response = await client.get("https://api.kick.com/public/v2/livestreams", headers=headers, params=params)
+            raw_id = record_raw(store.database_url, job_id, "research.kick", "kick_livestreams", response)
             response.raise_for_status()
             payload = response.json(); rows.extend(payload.get("data", []))
             cursor = payload.get("pagination", {}).get("next_cursor")
@@ -186,19 +305,21 @@ async def search_kick(store: ResearchStore, job_id: int, client_id: str, client_
         result = store.add_evidence(job_id, source_type="kick", url=url, title=str(row.get("stream_title") or slug),
                                     excerpt=f"{slug}: {row.get('viewer_count', 0)} viewers in {category.get('name', 'unknown')}.", query=query, metadata=row)
         matched.append({**result, "url": url, "stream": row})
-    return {"query": query, "scanned": len(rows), "matched": len(matched), "items": matched}
+    return {"query": query, "scanned": len(rows), "matched": len(matched), "items": matched, "raw_response_id": raw_id}
 
 
 async def read_discord_channel(store: ResearchStore, job_id: int, bot_token: str, channel_id: str, limit: int = 50) -> dict[str, Any]:
     if not bot_token:
-        raise ValueError("Discord message access is not configured. Add DISCORD_BOT_TOKEN in Setup and install that bot in the server.")
+        return not_configured("discord_messages")
     async with httpx.AsyncClient(timeout=30, headers={"Authorization": f"Bot {bot_token}", "User-Agent": "ResearchOyster/0.1"}) as client:
         channel_response = await client.get(f"https://discord.com/api/v10/channels/{channel_id}")
+        record_raw(store.database_url, job_id, "research.discord", "discord_channel", channel_response)
         if channel_response.status_code == 403:
             raise ValueError("The Oyster bot cannot view this channel. Grant View Channel before collecting messages.")
         channel_response.raise_for_status()
         guild_id = channel_response.json().get("guild_id")
         response = await client.get(f"https://discord.com/api/v10/channels/{channel_id}/messages", params={"limit": max(1, min(limit, 100))})
+        raw_id = record_raw(store.database_url, job_id, "research.discord", "discord_messages", response)
         if response.status_code == 403:
             raise ValueError("The Oyster bot cannot read this channel. Grant View Channel and Read Message History, and enable Message Content intent.")
         response.raise_for_status(); rows = response.json()
@@ -212,7 +333,7 @@ async def read_discord_channel(store: ResearchStore, job_id: int, bot_token: str
                                     published_at=datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")) if row.get("timestamp") else None,
                                     metadata={"channel_id": channel_id, "message_id": row["id"]})
         stored.append({**result, "url": url, "author": author.get("username", ""), "text": content})
-    return {"channel_id": channel_id, "received": len(rows), "stored": len(stored), "items": stored}
+    return {"channel_id": channel_id, "received": len(rows), "stored": len(stored), "items": stored, "raw_response_id": raw_id}
 
 
 async def crawl_web_page(store: ResearchStore, job_id: int, url: str, query: str = "") -> dict[str, Any]:
@@ -223,6 +344,12 @@ async def crawl_web_page(store: ResearchStore, job_id: int, url: str, query: str
 
     response = await anyio.to_thread.run_sync(lambda: Fetcher.get(url, timeout=30, stealthy_headers=True))
     _validate_public_url(str(response.url))
+    raw_id = record_raw_parts(
+        store.database_url, job_id, "research.web", "web_page",
+        method="GET", url=str(response.url), status=int(getattr(response, "status", 0) or 0),
+        response_headers=dict(getattr(response, "headers", {}) or {}),
+        content=(getattr(response, "body", None) or str(getattr(response, "html_content", "")).encode("utf-8", "replace")),
+    )
     if response.status >= 400:
         raise ValueError(f"The page returned HTTP {response.status}.")
     title = (response.css("title::text").get() or url).strip()
@@ -238,5 +365,5 @@ async def crawl_web_page(store: ResearchStore, job_id: int, url: str, query: str
         if len(links) >= 100:
             break
     result = store.add_evidence(job_id, source_type="web", url=str(response.url), title=title, excerpt=excerpt,
-                                query=query, metadata={"status": response.status, "discovered_links": links})
-    return {**result, "url": str(response.url), "title": title, "text": excerpt, "discovered_links": links}
+                                query=query, metadata={"status": response.status, "discovered_links": links, "raw_response_id": raw_id})
+    return {**result, "url": str(response.url), "title": title, "text": excerpt, "discovered_links": links, "raw_response_id": raw_id}

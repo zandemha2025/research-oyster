@@ -60,7 +60,35 @@ Resume work:
 - `connector_status`: report readiness and setup guidance without revealing secrets.
 - `list_research_jobs`: find resumable jobs.
 - `get_research_dossier`: return evidence, source coverage, and gaps.
+- `export_research_report`: write the report and raw evidence for a job to a folder under `output/`.
 - `get_browser_capture_mission`: derive browser terms and questions from the original brief.
+- `request_browser_traffic_session`: ask the researcher to approve a domain-scoped traffic capture session.
+- `get_browser_traffic_session`: poll whether a requested traffic session has been approved.
+
+## Connectors never dead-end
+
+When a connector lacks credentials it does not raise a failure and stop. It returns `{"not_configured": true, ...}` with an ordered list of `fallbacks` and the exact `setup` step. A well-behaved host tries the fallbacks in order — for example, an unconfigured Twitch connector routes to an Apify Twitch Actor, then a public stats-site crawl, then supervised browser capture — and only reports a gap after those are exhausted, always with the instructions to unlock it. A research run should end with the evidence it could gather plus clear next steps, never a bare "I couldn't do that."
+
+## Exporting the report and raw data
+
+Every job can leave chat as files. `export_research_report(job_id)` writes a folder `output/research-job-<id>-<slug>/` containing:
+
+- `report.md` and `report.html` — the dossier grouped by source, with a coverage table and a "Gaps and how to unlock them" section.
+- `evidence.json` and `evidence.csv` — every stored evidence row, including metadata; the CSV opens directly in a spreadsheet.
+- `raw_responses.jsonl` — the redacted network payloads captured during collection.
+
+The control center's **Research jobs** panel exposes **Export report** and **Open folder** for the same result without an AI host.
+
+## Approved-session browser traffic
+
+For evidence that lives in a page's network responses rather than its visible text:
+
+1. The host calls `request_browser_traffic_session(job_id, domain, reason)`. This only asks; nothing is captured yet.
+2. The researcher approves the request once in the extension popup (plus Chrome's own domain-permission prompt).
+3. While the approved session is live, the extension records the page's own JSON responses for that one domain, extracts message text into evidence, and stores the redacted payload as a `browser_network` raw response linked to the job.
+4. The session is single-domain, size-capped, at most thirty minutes, and stoppable at any time. The server re-validates every capture against the approved session.
+
+This is supervised and audited, but capturing platform traffic may breach that platform's terms of service — see `DISCLAIMER.md`.
 
 ## Supervised browser capture
 

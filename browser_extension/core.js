@@ -97,8 +97,81 @@
       captured_at: input.captured_at || now,
       capture_mode: input.capture_mode || "manual",
       anonymized: input.anonymized !== false,
-      approved_by_user: false
+      approved_by_user: false,
+      ...(input.metadata ? { metadata: input.metadata } : {})
     };
+  }
+
+  const SECRET_PARAM = /token|secret|auth|session|signature|password|key/i;
+
+  function redactUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      for (const key of [...url.searchParams.keys()]) {
+        if (SECRET_PARAM.test(key)) url.searchParams.set(key, "[REDACTED]");
+      }
+      return url.toString();
+    } catch (_) { return String(value || ""); }
+  }
+
+  function domainMatches(host, approvedDomain) {
+    host = String(host || "").toLowerCase();
+    approvedDomain = String(approvedDomain || "").toLowerCase();
+    if (!host || !approvedDomain) return false;
+    return host === approvedDomain || host.endsWith(`.${approvedDomain}`);
+  }
+
+  const MESSAGE_KEYS = ["content", "text", "body", "message", "title", "description"];
+  const AUTHOR_KEYS = ["username", "author", "name", "display_name", "handle", "screen_name"];
+
+  function extractMessages(json, maxItems, maxLength) {
+    const found = [];
+    const limit = Math.max(1, Number(maxItems) || 25);
+    const seen = new Set();
+    (function walk(node, author) {
+      if (found.length >= limit || node == null) return;
+      if (Array.isArray(node)) {
+        for (const child of node) walk(child, author);
+        return;
+      }
+      if (typeof node === "object") {
+        let localAuthor = author;
+        for (const key of AUTHOR_KEYS) {
+          const value = node[key];
+          if (typeof value === "string" && value.trim()) { localAuthor = value.trim(); break; }
+          if (value && typeof value === "object") {
+            for (const inner of AUTHOR_KEYS) {
+              if (typeof value[inner] === "string" && value[inner].trim()) { localAuthor = value[inner].trim(); break; }
+            }
+          }
+        }
+        for (const key of MESSAGE_KEYS) {
+          const value = node[key];
+          if (typeof value === "string") {
+            const text = cleanText(value, maxLength || 4000);
+            if (text && !seen.has(text)) {
+              seen.add(text);
+              found.push(localAuthor ? `${localAuthor}: ${text}` : text);
+              if (found.length >= limit) return;
+            }
+          }
+        }
+        for (const key of Object.keys(node)) {
+          if (!MESSAGE_KEYS.includes(key) && !AUTHOR_KEYS.includes(key)) walk(node[key], localAuthor);
+        }
+      }
+    })(json, "");
+    return found.join("\n").slice(0, maxLength || 12000);
+  }
+
+  function payloadFingerprint(url, body) {
+    const input = `${canonicalUrl(url)}|${String(body || "")}`;
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < input.length; i++) {
+      hash ^= input.charCodeAt(i);
+      hash = (hash + ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24))) >>> 0;
+    }
+    return hash.toString(16);
   }
 
   function score(text, terms) {
@@ -110,5 +183,5 @@
     }, 0);
   }
 
-  return { sourceType, cleanText, canonicalUrl, fingerprint, dedupeCaptures, approvalPayload, anonymize, normalizeBaseUrl, capture, score };
+  return { sourceType, cleanText, canonicalUrl, fingerprint, dedupeCaptures, approvalPayload, anonymize, normalizeBaseUrl, capture, score, redactUrl, domainMatches, extractMessages, payloadFingerprint };
 });

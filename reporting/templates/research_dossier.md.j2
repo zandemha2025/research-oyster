@@ -1,0 +1,42 @@
+# Research dossier: {{ job.brief | cell }}
+
+_Generated {{ generated_at }} · job #{{ job.id }} · {{ evidence_count }} evidence items across {{ coverage | length }} sources_
+
+| Field | Value |
+|---|---|
+| Decision | {{ job.decision or "—" | cell }} |
+| Market | {{ job.market or "—" | cell }} |
+| Time horizon | {{ job.time_horizon or "—" | cell }} |
+| Status | {{ job.status | cell }} |
+| Created | {{ job.created_at | cell }} |
+
+## Research questions
+{% for question in plan.research_questions %}- {{ question | cell }}
+{% endfor %}
+## Recommended sources
+{% for source in plan.recommended_sources %}- {{ source | cell }}
+{% endfor %}
+## Query families
+{% for query in plan.query_families %}- {{ query | cell }}
+{% endfor %}
+## Findings by source
+{% if not findings %}
+No evidence was stored for this job yet.
+{% endif %}{% for group in findings %}
+### {{ group.source_type | cell }} ({{ group.entries | length }})
+{% for item in group.entries %}- {% if item.url %}[{{ item.title or item.url | cell }}]({{ item.url }}){% else %}{{ item.title | cell }}{% endif %}{% if item.author %} — {{ item.author | cell }}{% endif %}{% if item.published %} ({{ item.published | cell }}){% endif %}: {{ item.excerpt | cell }}
+{% endfor %}{% endfor %}
+## Source coverage
+
+| Source | Items |
+|---|---|
+{% for row in coverage %}| {{ row.source | cell }} | {{ row.count }} |
+{% endfor %}
+## Gaps and how to unlock them
+{% if not gaps %}
+Every recommended source produced evidence. No gaps remain.
+{% endif %}{% for gap in gaps %}
+### {{ gap.source | cell }}
+{% if gap.setup %}- **Set up:** {{ gap.setup | cell }}
+{% endif %}{% for fallback in gap.fallbacks %}- **Fallback:** {{ fallback | cell }}
+{% endfor %}{% endfor %}

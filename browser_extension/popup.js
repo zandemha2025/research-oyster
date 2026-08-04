@@ -17,9 +17,66 @@ async function init() {
   $("#clear").onclick = clearAll;
   chrome.storage.onChanged.addListener(async changes => {
     if (changes.localCandidates || changes.notice) { state = await chrome.storage.local.get(defaults); renderQueue(); renderNotice(); }
+    if (changes.activeSession) renderActiveSession(changes.activeSession.newValue);
   });
   renderStatus(); renderQueue(); renderNotice();
-  if (state.token) await loadJobs();
+  if (state.token) { await loadJobs(); await loadSessions(); }
+}
+
+async function loadSessions() {
+  if (!state.token) return;
+  try {
+    const requests = await api("/api/capture/sessions");
+    renderSessionRequests(Array.isArray(requests) ? requests : []);
+  } catch (error) { /* non-fatal: sessions are optional */ }
+  const { activeSession } = await chrome.storage.local.get({ activeSession: null });
+  renderActiveSession(activeSession);
+}
+
+function renderSessionRequests(sessions) {
+  const pending = sessions.filter(s => s.status === "requested");
+  const el = $("#sessionRequests");
+  if (!pending.length) { el.innerHTML = ""; return; }
+  el.innerHTML = pending.map(s => `<article class="card">
+    <div class="meta"><strong>${escapeHtml(s.domain)}</strong> · job ${escapeHtml(s.job_id)}</div>
+    <div class="meta">${escapeHtml(s.reason || "")}</div>
+    <div class="actions"><button class="secondary session-approve" data-id="${escapeHtml(s.id)}" data-domain="${escapeHtml(s.domain)}" data-job="${escapeHtml(s.job_id)}">Approve (30 min)</button><button class="danger session-decline" data-id="${escapeHtml(s.id)}">Decline</button></div></article>`).join("");
+  document.querySelectorAll(".session-approve").forEach(b => b.onclick = () => approveSession(b.dataset.id));
+  document.querySelectorAll(".session-decline").forEach(b => b.onclick = () => declineSession(b.dataset.id));
+}
+
+function renderActiveSession(session) {
+  const el = $("#activeSession");
+  if (!session || !session.id) { el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  el.innerHTML = `<article class="card"><div class="meta"><strong>Recording ${escapeHtml(session.domain)}</strong></div>
+    <div class="meta">Ends ${escapeHtml(formatTime(session.expiresAt))}</div>
+    <div class="actions"><button class="danger session-stop" data-id="${escapeHtml(session.id)}">Stop recording</button></div></article>`;
+  el.querySelector(".session-stop").onclick = () => stopSession(session.id);
+}
+
+async function approveSession(sessionId) {
+  setBusy(true);
+  try {
+    const result = await api(`/api/capture/sessions/${encodeURIComponent(sessionId)}/approve`, {
+      method: "POST", body: JSON.stringify({ approved_by_user: true, ttl_minutes: 30 })
+    });
+    const response = await chrome.runtime.sendMessage({ type: "SESSION_START", session: result });
+    if (!response?.ok) throw new Error(response?.error || "Could not start recording on this domain.");
+    show(`Recording ${result.domain} until the session ends. Nothing else is captured.`, "success");
+    await loadSessions();
+  } catch (error) { show(error.message, "error"); }
+  finally { setBusy(false); }
+}
+
+async function declineSession(sessionId) {
+  try { await api(`/api/capture/sessions/${encodeURIComponent(sessionId)}/decline`, { method: "POST", body: "{}" }); await loadSessions(); }
+  catch (error) { show(error.message, "error"); }
+}
+
+async function stopSession(sessionId) {
+  try { await chrome.runtime.sendMessage({ type: "SESSION_STOP", session_id: sessionId }); show("Recording stopped.", "success"); await loadSessions(); }
+  catch (error) { show(error.message, "error"); }
 }
 
 async function api(path, options={}) {

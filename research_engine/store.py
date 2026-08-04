@@ -59,6 +59,17 @@ class ResearchStore:
             "gaps": [source for source in job["plan"]["recommended_sources"] if not counts.get(source)],
         }
 
+    def list_raw_responses(self, job_id: int) -> list[dict[str, Any]]:
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, collector, payload_kind, request_method, request_url, response_status,
+                          response_headers, body, body_text, body_hash, received_at
+                   FROM raw_responses WHERE research_job_id=%s ORDER BY received_at, id""",
+                (job_id,),
+            )
+            rows = cur.fetchall()
+        return [{key: (value.isoformat() if hasattr(value, "isoformat") else value) for key, value in row.items()} for row in rows]
+
     def list_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
         with connect(self.database_url) as conn, conn.cursor() as cur:
             cur.execute("SELECT id,brief,decision,status,created_at,updated_at FROM research_jobs ORDER BY updated_at DESC LIMIT %s", (limit,))

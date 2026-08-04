@@ -59,3 +59,41 @@ test("atomic approval preserves job and id but excludes raw text when anonymized
 test("atomic approval rejects missing immutable binding",()=>{
   assert.throws(()=>core.approvalPayload({client_capture_id:"x",excerpt:"Evidence"}),/original job/);
 });
+
+test("redactUrl strips secret-looking query values but keeps the rest",()=>{
+  assert.equal(core.redactUrl("https://discord.com/api?token=abc&channel=42"),"https://discord.com/api?token=%5BREDACTED%5D&channel=42");
+  assert.equal(core.redactUrl("https://discord.com/api?channel=42"),"https://discord.com/api?channel=42");
+});
+
+test("domainMatches accepts exact host and subdomains only",()=>{
+  assert.equal(core.domainMatches("discord.com","discord.com"),true);
+  assert.equal(core.domainMatches("gateway.discord.com","discord.com"),true);
+  assert.equal(core.domainMatches("evildiscord.com","discord.com"),false);
+  assert.equal(core.domainMatches("discord.com.evil.com","discord.com"),false);
+});
+
+test("extractMessages pulls message text with authors from nested JSON",()=>{
+  const discordShape=[{content:"great movie",author:{username:"bob"}},{content:"loved the ending",author:{username:"amy"}}];
+  const out=core.extractMessages(discordShape,10,4000);
+  assert.match(out,/bob: great movie/);
+  assert.match(out,/amy: loved the ending/);
+});
+
+test("extractMessages honors the item cap",()=>{
+  const many=Array.from({length:50},(_,i)=>({text:`msg ${i}`,name:`u${i}`}));
+  assert.equal(core.extractMessages(many,5,4000).split("\n").length,5);
+});
+
+test("payloadFingerprint is stable and dedupes identical payloads",()=>{
+  const a=core.payloadFingerprint("https://x.com/api","BODY");
+  const b=core.payloadFingerprint("https://x.com/api","BODY");
+  const c=core.payloadFingerprint("https://x.com/api","OTHER");
+  assert.equal(a,b);
+  assert.notEqual(a,c);
+});
+
+test("capture passes through metadata and approved_session mode",()=>{
+  const item=core.capture({excerpt:"bob: hi",url:"https://discord.com/x",job_id:"5",capture_mode:"approved_session",metadata:{session_id:9,network:{url:"https://discord.com/api"}}});
+  assert.equal(item.capture_mode,"approved_session");
+  assert.equal(item.metadata.session_id,9);
+});

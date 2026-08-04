@@ -61,23 +61,48 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             {"create_research_job", "add_evidence", "fetch_rss", "search_x", "inspect_discord_invite",
              "run_apify_actor", "search_twitch", "search_kick", "read_discord_channel",
-             "crawl_web_page", "get_research_dossier", "list_research_jobs", "connector_status", "get_browser_capture_mission"},
+             "crawl_web_page", "get_research_dossier", "list_research_jobs", "connector_status",
+             "get_browser_capture_mission", "export_research_report",
+             "request_browser_traffic_session", "get_browser_traffic_session"},
             names,
         )
 
-    async def test_x_without_token_explains_the_fix(self):
+    async def test_unconfigured_connector_offers_a_next_door_instead_of_failing(self):
         store = mock.Mock()
-        with self.assertRaisesRegex(ValueError, "X_BEARER_TOKEN"):
-            await connectors.search_x(store, 1, "", "sparkling water")
+        result = await connectors.search_x(store, 1, "", "sparkling water")
+        self.assertTrue(result["not_configured"])
+        self.assertEqual("x_official", result["connector"])
+        self.assertTrue(result["setup"])
+        self.assertTrue(result["fallbacks"])
+        self.assertEqual(result["next_step"], result["fallbacks"][0])
 
-    async def test_optional_connectors_explain_onboarding(self):
+    async def test_optional_connectors_always_offer_ordered_fallbacks(self):
         store = mock.Mock()
-        with self.assertRaisesRegex(ValueError, "APIFY_TOKEN"):
-            await connectors.run_apify_actor(store, 1, "", "owner/actor", {}, "reddit")
-        with self.assertRaisesRegex(ValueError, "Client ID"):
-            await connectors.search_twitch(store, 1, "", "", "cars")
-        with self.assertRaisesRegex(ValueError, "DISCORD_BOT_TOKEN"):
-            await connectors.read_discord_channel(store, 1, "", "123")
+        cases = [
+            (connectors.run_apify_actor(store, 1, "", "owner/actor", {}, "reddit"), "apify"),
+            (connectors.search_twitch(store, 1, "", "", "cars"), "twitch"),
+            (connectors.search_kick(store, 1, "", "", "cars"), "kick"),
+            (connectors.read_discord_channel(store, 1, "", "123"), "discord_messages"),
+        ]
+        for coro, connector in cases:
+            result = await coro
+            self.assertTrue(result["not_configured"], connector)
+            self.assertEqual(connector, result["connector"])
+            self.assertTrue(result["fallbacks"], f"{connector} must offer at least one fallback")
+            self.assertTrue(result["next_step"])
+
+    def test_connector_status_is_derived_from_one_registry(self):
+        from research_engine import mcp_server
+        blank = mock.Mock(
+            apify_token="", x_bearer_token="", twitch_client_id="", twitch_client_secret="",
+            kick_client_id="", kick_client_secret="", discord_bot_token="",
+        )
+        with mock.patch.object(mcp_server, "settings", blank):
+            status = mcp_server.connector_status()
+        for connector in ("twitch", "kick", "apify", "discord_messages"):
+            self.assertIn("ready", status[connector])
+            self.assertFalse(status[connector]["ready"])
+            self.assertTrue(status[connector]["fallbacks"], f"{connector} needs fallbacks in connector_status")
 
     def test_private_and_local_crawl_targets_are_rejected(self):
         private = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))]
@@ -133,6 +158,49 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(connectors.httpx, "AsyncClient", return_value=self._Client(get=self._response(discord_payload))):
             result = await connectors.inspect_discord_invite(store, 1, "https://discord.gg/evowners")
         self.assertEqual("EV Owners", result["guild_name"])
+
+
+class ExportTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import os
+        from db.queries import connect, migrate
+        cls.database_url = os.getenv("DATABASE_URL", "postgresql:///gaming_pulse")
+        try:
+            with connect(cls.database_url) as conn:
+                migrate(conn)
+        except Exception as exc:  # pragma: no cover - environment-specific skip
+            raise unittest.SkipTest(f"PostgreSQL is unavailable: {exc}") from exc
+
+    def test_export_writes_report_and_raw_evidence_files(self):
+        import csv
+        import json
+        import tempfile
+        from pathlib import Path
+        from research_engine.store import ResearchStore
+        from research_engine.export import export_job
+
+        store = ResearchStore(self.database_url)
+        plan = build_plan("Export test brief for pipes and formulas", decision="ship it")
+        job_id = store.create_job("Export test brief for pipes and formulas", "ship it", "", "", plan)["job_id"]
+        store.add_evidence(job_id, source_type="reddit", url="https://reddit.com/r/x/1",
+                           title="value | comparison", excerpt="=danger they said A | B at a third", author="user")
+
+        with tempfile.TemporaryDirectory() as directory:
+            result = export_job(store, job_id, Path(directory))
+            folder = Path(result["folder"])
+            names = {Path(f).name for f in result["files"]}
+            self.assertEqual({"report.md", "report.html", "evidence.json", "evidence.csv", "raw_responses.jsonl"}, names)
+            # HTML renders a table (the pipe in the excerpt did not break the row).
+            self.assertIn("<table>", folder.joinpath("report.html").read_text())
+            # CSV re-parses and the formula-injection guard prefixed the risky cell.
+            with folder.joinpath("evidence.csv").open(newline="") as handle:
+                rows = list(csv.reader(handle))
+            self.assertEqual(2, len(rows))
+            self.assertTrue(rows[1][4].startswith("'="))
+            # JSON round-trips and the gaps section carries setup instructions.
+            self.assertIsInstance(json.loads(folder.joinpath("evidence.json").read_text()), list)
+            self.assertIn("X_BEARER_TOKEN", folder.joinpath("report.md").read_text())
 
 
 if __name__ == "__main__":

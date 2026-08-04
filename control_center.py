@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 from db.queries import connect, migrate
 from research_engine.capture import CaptureStore
+from research_engine.export import export_job
 from research_engine.store import ResearchStore
 from settings import Settings
 
@@ -86,6 +87,18 @@ def monday_for_today() -> str:
 def latest_output(pattern: str) -> Path | None:
     files = list(OUTPUT.glob(pattern)) if OUTPUT.exists() else []
     return max(files, key=lambda path: path.stat().st_mtime) if files else None
+
+
+def open_path(path: Path) -> None:
+    """Open a file or folder in the OS file browser, cross-platform."""
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    elif sys.platform == "win32":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+    elif sys.platform.startswith("linux"):
+        subprocess.Popen(["xdg-open", str(path)])
+    else:
+        raise ValueError(f"Opening files is not supported on this platform ({sys.platform}). The file is at {path}.")
 
 
 def friendly_error(text: str) -> str:
@@ -257,6 +270,7 @@ button,.button{font:inherit;font-weight:650;border:0;border-radius:10px;padding:
 </section>
 <section class="grid"><div class="panel"><h2>System check</h2><div id="checks"></div><button onclick="refresh()">Check again</button></div>
 <div class="panel"><h2>Your reports</h2><p id="reportText">No reports found yet.</p><div class="links"><button id="weekly" onclick="openFile('weekly')" disabled>Open weekly report</button><button id="fresh" onclick="openFile('fresh')" disabled>Open fresh brief</button><button onclick="openFile('output')">Open output folder</button></div></div>
+<div class="panel"><h2>Research jobs</h2><p class="muted">Export any research job to a folder with a readable report, the raw evidence (JSON + CSV), and the captured network payloads.</p><div id="researchJobs"><p class="muted">Loading…</p></div></div>
 <div class="panel pairing"><h2>Supervised browser capture</h2><p>Pair the Oyster extension to save approved excerpts from pages you can already access. Oyster never receives browser cookies or passwords.</p><button id="pairButton" onclick="createPairingCode()">Create one-time pairing code</button><div id="pairCode" class="paircode" aria-live="polite"><span class="muted">Local service</span><code id="captureAddress">http://127.0.0.1:8765</code><span class="muted">Pairing code — expires in 10 minutes</span><code id="captureCode"></code></div></div>
 <div class="panel"><h2>How capture feeds research</h2><p>Select an active brief in the extension. Oyster turns that brief into a capture mission, keeps candidates in review, and promotes only approved captures into the original dossier.</p><p class="muted">Best-effort name redaction is on by default; review every excerpt. Only capture material you are authorized to view and retain.</p></div></section>
 </main>
@@ -272,13 +286,16 @@ button,.button{font:inherit;font-weight:650;border:0;border-radius:10px;padding:
 <script>
 const token='__TOKEN__';let state={};
 async function api(path,body){const opt=body?{method:'POST',headers:{'Content-Type':'application/json','X-Pulse-Token':token},body:JSON.stringify(body)}:{};const r=await fetch(path,opt);const data=await r.json();if(!r.ok)throw new Error(data.error||'Request failed');return data}
-async function refresh(){state=await api('/api/status');document.getElementById('headline').textContent=state.ready?'Your system is ready':'Setup needs attention';document.getElementById('headline').className=state.ready?'ready':'notready';document.getElementById('subline').textContent=state.ready?'You can collect fresh signals or create reports.':'Open Setup to finish connecting the database.';document.getElementById('checks').innerHTML=state.checks.map(c=>`<div class="check"><span>${c.name}</span><span class="${c.ok?'ok':c.optional?'muted':'bad'}">${c.ok?'✓':c.optional?'—':'○'} ${c.detail}</span></div>`).join('');document.getElementById('weekly').disabled=!state.latest_weekly;document.getElementById('fresh').disabled=!state.latest_fresh;document.getElementById('reportText').textContent=state.latest_weekly?`Latest weekly report: ${state.latest_weekly}`:'No weekly report has been created yet.'}
+async function refresh(){state=await api('/api/status');document.getElementById('headline').textContent=state.ready?'Your system is ready':'Setup needs attention';document.getElementById('headline').className=state.ready?'ready':'notready';document.getElementById('subline').textContent=state.ready?'You can collect fresh signals or create reports.':'Open Setup to finish connecting the database.';document.getElementById('checks').innerHTML=state.checks.map(c=>`<div class="check"><span>${c.name}</span><span class="${c.ok?'ok':c.optional?'muted':'bad'}">${c.ok?'✓':c.optional?'—':'○'} ${c.detail}</span></div>`).join('');document.getElementById('weekly').disabled=!state.latest_weekly;document.getElementById('fresh').disabled=!state.latest_fresh;document.getElementById('reportText').textContent=state.latest_weekly?`Latest weekly report: ${state.latest_weekly}`:'No weekly report has been created yet.';loadResearchJobs()}
 async function run(action){if(!state.ready&&action!=='setup'){openSetup();return}showJob(action==='pulse'?'Collecting fresh signals':action==='collect'?'Collecting today’s data':'Creating weekly report','Working. Keep this window open.','running');try{const payload={action,week_start:state.week_start};if(action==='pulse')payload.sources=state.available_sources;const x=await api('/api/run',payload);poll(x.job_id)}catch(e){showJob('Could not start',e.message,'failed')}}
 async function poll(id){const x=await api('/api/job?id='+id);showJob(x.status==='running'?'Working...':x.status==='success'?'Done':'Needs attention',x.message,x.status,x.details);if(x.status==='running')setTimeout(()=>poll(id),1000);else refresh()}
 function showJob(title,msg,status,details=''){const e=document.getElementById('job');e.className='job show '+status;document.getElementById('jobTitle').textContent=title;document.getElementById('jobMessage').textContent=msg;document.getElementById('jobDetails').textContent=details||'No additional details.'}
 async function openSetup(){try{const saved=await api('/api/settings');db.value='';db.placeholder=saved.configured.database?'Saved — leave blank to keep':'postgresql://user:password@localhost:5432/research';hour.value=saved.collection_hour_utc??16;const labels={tid:'twitch',tsecret:'twitch',kid:'kick',ksecret:'kick',xtoken:'x',apifytoken:'apify',discordtoken:'discord_bot'};for(const [id,key] of Object.entries(labels)){document.getElementById(id).placeholder=saved.configured[key]?'Saved — leave blank to keep':'Not configured'}}catch(e){showJob('Could not load setup',e.message,'failed')}document.getElementById('modal').classList.add('show')}function closeSetup(){document.getElementById('modal').classList.remove('show')}
 async function saveSetup(){const values={DATABASE_URL:db.value,TWITCH_CLIENT_ID:tid.value,TWITCH_CLIENT_SECRET:tsecret.value,KICK_CLIENT_ID:kid.value,KICK_CLIENT_SECRET:ksecret.value,X_BEARER_TOKEN:xtoken.value,APIFY_TOKEN:apifytoken.value,DISCORD_BOT_TOKEN:discordtoken.value,COLLECTION_HOUR_UTC:hour.value};try{await api('/api/settings',values);closeSetup();await refresh();run('setup')}catch(e){alert(e.message)}}
 async function openFile(kind){await api('/api/open',{kind})}
+async function loadResearchJobs(){try{const jobs=await api('/api/research/jobs');const el=document.getElementById('researchJobs');if(!jobs.length){el.innerHTML='<p class="muted">No research jobs yet. Ask your AI host to use Research Oyster.</p>';return}el.innerHTML=jobs.map(j=>`<div class="check"><span>#${j.id} ${(j.brief||'').slice(0,60)}<br><span class="muted">${j.status} · ${(j.created_at||'').slice(0,10)}</span></span><span class="links"><button onclick="exportResearch(${j.id})">Export report</button><button onclick="openResearch(${j.id})">Open folder</button></span></div>`).join('')}catch(e){document.getElementById('researchJobs').innerHTML=`<p class="bad">${e.message}</p>`}}
+async function exportResearch(id){showJob('Exporting research report','Writing report and raw evidence to a folder…','running');try{const x=await api('/api/research/export',{job_id:id});showJob('Report exported',`${x.evidence_count} evidence items and ${x.raw_count} raw payloads written to ${x.folder}`,'success')}catch(e){showJob('Could not export',e.message,'failed')}}
+async function openResearch(id){try{await api('/api/open',{kind:'research',job_id:id})}catch(e){showJob('Could not open folder',e.message,'failed')}}
 async function createPairingCode(){if(!state.ready){openSetup();return}try{const x=await api('/api/capture/pairing-code',{});document.getElementById('captureCode').textContent=x.pairing_code;document.getElementById('pairCode').classList.add('show');document.getElementById('pairButton').textContent='Create a new code'}catch(e){showJob('Could not create pairing code',e.message,'failed')}}
 refresh();
 </script></body></html>'''
@@ -356,6 +373,26 @@ class Handler(BaseHTTPRequestHandler):
             with JOBS_LOCK:
                 job = JOBS.get(job_id)
             self.send_json(job or {"error": "Job not found"}, 200 if job else 404)
+        elif parsed.path == "/api/research/jobs":
+            try:
+                self.send_json(ResearchStore(Settings().database_url).list_jobs(50))
+            except Exception as exc:
+                self.send_json({"error": friendly_error(str(exc))}, 400)
+        elif parsed.path == "/api/research/sessions":
+            try:
+                self.send_json(capture_store().list_sessions())
+            except Exception as exc:
+                self.send_json({"error": friendly_error(str(exc))}, 400)
+        elif parsed.path == "/api/capture/sessions":
+            try:
+                store, _client = self.capture_client()
+                query = dict(part.split("=", 1) for part in parsed.query.split("&") if "=" in part)
+                job_id = int(query["job_id"]) if query.get("job_id") else None
+                self.send_json(store.list_sessions(job_id=job_id))
+            except PermissionError as exc:
+                self.send_json({"error": str(exc)}, 403)
+            except Exception as exc:
+                self.send_json({"error": friendly_error(str(exc))}, 400)
         elif parsed.path == "/api/capture/jobs":
             try:
                 _, _client = self.capture_client()
@@ -412,7 +449,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": "This control-center session has expired. Refresh the page."}, 403)
             return
         try:
-            payload = self.read_json()
+            # Approved-session captures carry a network payload plus excerpt; allow more headroom.
+            payload = self.read_json(524_288 if parsed.path == "/api/capture/approve" else 262_144)
             if parsed.path == "/api/settings":
                 if not str(payload.get("DATABASE_URL", "")).strip():
                     try:
@@ -426,12 +464,27 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True})
             elif parsed.path == "/api/run":
                 self.send_json({"job_id": start_job(payload.get("action", ""), payload)})
+            elif parsed.path == "/api/research/export":
+                job_id = int(payload.get("job_id", 0))
+                if job_id <= 0:
+                    raise ValueError("A research job id is required.")
+                self.send_json(export_job(ResearchStore(Settings().database_url), job_id, Settings().output_dir))
+            elif parsed.path.startswith("/api/research/sessions/") and parsed.path.endswith("/stop"):
+                session_id = int(parsed.path.split("/")[4])
+                self.send_json(capture_store().stop_session(session_id))
             elif parsed.path == "/api/open":
                 kind = payload.get("kind")
-                target = OUTPUT if kind == "output" else latest_output("*-gaming-pulse.html" if kind == "weekly" else "*-fresh-signals.md")
+                if kind == "research":
+                    job_id = int(payload.get("job_id", 0))
+                    result = export_job(ResearchStore(Settings().database_url), job_id, Settings().output_dir)
+                    target = Path(result["folder"])
+                elif kind == "output":
+                    target = OUTPUT
+                else:
+                    target = latest_output("*-gaming-pulse.html" if kind == "weekly" else "*-fresh-signals.md")
                 if not target:
                     raise ValueError("There is no report to open yet.")
-                subprocess.Popen(["open", str(target)])
+                open_path(Path(target))
                 self.send_json({"ok": True})
             elif parsed.path == "/api/capture/pairing-code":
                 self.send_json(capture_store().create_pairing_code())
@@ -470,6 +523,21 @@ class Handler(BaseHTTPRequestHandler):
                 store, client = self.capture_client()
                 store.revoke_client(client["client_id"])
                 self.send_json({"ok": True})
+            elif parsed.path.startswith("/api/capture/sessions/") and parsed.path.endswith("/approve"):
+                store, client = self.capture_client()
+                if payload.get("approved_by_user") is not True:
+                    raise ValueError("Explicit user approval is required to start a capture session.")
+                session_id = int(parsed.path.split("/")[4])
+                ttl = int(payload.get("ttl_minutes", 30))
+                self.send_json(store.approve_session(session_id, client["client_id"], ttl_minutes=ttl))
+            elif parsed.path.startswith("/api/capture/sessions/") and parsed.path.endswith("/decline"):
+                store, client = self.capture_client()
+                session_id = int(parsed.path.split("/")[4])
+                self.send_json(store.decline_session(session_id, client["client_id"]))
+            elif parsed.path.startswith("/api/capture/sessions/") and parsed.path.endswith("/stop"):
+                store, client = self.capture_client()
+                session_id = int(parsed.path.split("/")[4])
+                self.send_json(store.stop_session(session_id, client_id=client["client_id"]))
             else:
                 self.send_json({"error": "Not found"}, 404)
         except PermissionError as exc:

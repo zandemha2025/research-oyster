@@ -243,6 +243,64 @@ class CaptureBackendTests(unittest.TestCase):
         self.assertEqual([], ResearchStore(DATABASE_URL).dossier(self.job_id)["evidence"])
         self.assertEqual("capture.deleted", self.store.audit_log(approved["capture_id"])[-1]["event_type"])
 
+    # --- Approved-session traffic capture -------------------------------------------
+
+    def _network_capture(self, session_id, url="https://discord.com/channels/1/2/3", key="net-1"):
+        body = '[{"content":"the movie was great","author":{"username":"bob"}}]'
+        return self.store.approve_direct(
+            self.client_id, client_capture_id=key, job_id=self.job_id,
+            url=url, excerpt="bob: the movie was great", capture_mode="approved_session",
+            metadata={"session_id": session_id, "network": {
+                "url": "https://discord.com/api/v9/channels/1/messages?token=SECRET",
+                "method": "GET", "status": 200, "content_type": "application/json", "body": body}},
+        )
+
+    def test_traffic_session_request_validates_domain_and_rejects_duplicates(self):
+        for bad in ("localhost", "127.0.0.1", "http://discord.com/x", "discord.com:443"):
+            with self.assertRaises(ValueError):
+                self.store.request_session(self.job_id, bad, "collect chatter")
+        session = self.store.request_session(self.job_id, "discord.com", "collect movie chatter")
+        self.assertEqual("requested", session["status"])
+        with self.assertRaisesRegex(ValueError, "already open"):
+            self.store.request_session(self.job_id, "discord.com", "again")
+
+    def test_approved_session_gate_blocks_capture_until_approved_then_promotes_raw(self):
+        session = self.store.request_session(self.job_id, "discord.com", "collect movie chatter")
+        with self.assertRaisesRegex(PermissionError, "No approved capture session"):
+            self._network_capture(session["id"])
+        self.store.approve_session(session["id"], self.client_id, ttl_minutes=30)
+        result = self._network_capture(session["id"])
+        self.assertEqual("approved", result["status"])
+        research = ResearchStore(DATABASE_URL)
+        evidence = next(e for e in research.dossier(self.job_id)["evidence"] if e["id"] == result["evidence_id"])
+        # Evidence keeps a bounded summary; the raw body is not stored on the evidence row.
+        self.assertEqual(200, evidence["metadata"]["network"]["status"])
+        self.assertNotIn("body", evidence["metadata"]["network"])
+        raws = research.list_raw_responses(self.job_id)
+        self.assertEqual([("browser.approved_session", "browser_network")],
+                         [(r["collector"], r["payload_kind"]) for r in raws])
+        # The secret query param is redacted in the stored raw payload.
+        self.assertNotIn("SECRET", raws[0]["request_url"])
+
+    def test_approved_session_rejects_offdomain_and_stopped_sessions(self):
+        session = self.store.request_session(self.job_id, "discord.com", "collect chatter")
+        self.store.approve_session(session["id"], self.client_id, ttl_minutes=30)
+        with self.assertRaisesRegex(PermissionError, "No approved capture session"):
+            self._network_capture(session["id"], url="https://evil.com/x", key="off-domain")
+        self.store.stop_session(session["id"])
+        with self.assertRaisesRegex(PermissionError, "No approved capture session"):
+            self._network_capture(session["id"], key="after-stop")
+
+    def test_expired_session_is_not_active(self):
+        session = self.store.request_session(self.job_id, "discord.com", "collect chatter")
+        self.store.approve_session(session["id"], self.client_id, ttl_minutes=30)
+        with connect(DATABASE_URL) as conn, conn.cursor() as cur:
+            cur.execute("UPDATE capture_sessions SET expires_at=now() - interval '1 minute' WHERE id=%s", (session["id"],))
+            conn.commit()
+        self.assertIsNone(self.store.active_session(self.client_id, self.job_id, "discord.com"))
+        with self.assertRaisesRegex(PermissionError, "No approved capture session"):
+            self._network_capture(session["id"], key="expired")
+
 
 if __name__ == "__main__":
     unittest.main()

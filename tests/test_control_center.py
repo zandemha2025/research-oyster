@@ -92,6 +92,37 @@ class ControlCenterTests(unittest.TestCase):
         self.assertIn("127.0.0.1", control_center.main.__code__.co_consts)
         self.assertIn("X-Pulse-Token", control_center.HTML)
 
+    def test_open_path_dispatches_by_platform(self):
+        with mock.patch.object(control_center.sys, "platform", "darwin"), \
+             mock.patch.object(control_center.subprocess, "Popen") as popen:
+            control_center.open_path(Path("/tmp/x"))
+            popen.assert_called_once_with(["open", "/tmp/x"])
+        with mock.patch.object(control_center.sys, "platform", "linux"), \
+             mock.patch.object(control_center.subprocess, "Popen") as popen:
+            control_center.open_path(Path("/tmp/x"))
+            popen.assert_called_once_with(["xdg-open", "/tmp/x"])
+        with mock.patch.object(control_center.sys, "platform", "sunos"):
+            with self.assertRaisesRegex(ValueError, "not supported"):
+                control_center.open_path(Path("/tmp/x"))
+
+    def test_research_and_session_endpoints_are_registered(self):
+        get_consts = str(control_center.Handler.do_GET.__code__.co_consts)
+        post_consts = str(control_center.Handler.do_POST.__code__.co_consts)
+        self.assertIn("/api/research/jobs", get_consts)
+        self.assertIn("/api/research/sessions", get_consts)
+        self.assertIn("/api/capture/sessions", get_consts)
+        self.assertIn("/api/research/export", post_consts)
+        self.assertIn("/approve", post_consts)
+
+    def test_research_export_is_a_token_gated_mutation(self):
+        # Non-capture POSTs require X-Pulse-Token; /api/research/export is not a capture path.
+        self.assertFalse("/api/research/export".startswith("/api/capture/"))
+        self.assertIn("X-Pulse-Token", control_center.HTML)
+
+    def test_research_jobs_panel_is_in_the_ui(self):
+        self.assertIn("Research jobs", control_center.HTML)
+        self.assertIn("loadResearchJobs", control_center.HTML)
+
 
 if __name__ == "__main__":
     unittest.main()
