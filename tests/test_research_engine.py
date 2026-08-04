@@ -40,6 +40,16 @@ class PlannerTests(unittest.TestCase):
             build_plan("water")
 
 
+class RssCleaningTests(unittest.TestCase):
+    def test_feed_html_is_reduced_to_readable_text(self):
+        # Google News and many feeds put HTML (anchor tags, entities) in summaries;
+        # the stored excerpt must be readable text, not raw markup.
+        raw = '<a href="https://news.google.com/x">Spider-Man &amp; the ending</a>  <b>review</b>'
+        self.assertEqual("Spider-Man & the ending review", connectors._plain_text(raw))
+        self.assertEqual("", connectors._plain_text("<p></p>"))
+        self.assertEqual("plain", connectors._plain_text("plain"))
+
+
 class MCPTests(unittest.IsolatedAsyncioTestCase):
     class _Client:
         def __init__(self, *, get=None, post=None):

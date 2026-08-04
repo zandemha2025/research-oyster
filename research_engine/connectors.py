@@ -5,11 +5,20 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 
 import feedparser
+import html as _html
 import httpx
 import re
 import ipaddress
 import socket
 from urllib.parse import urljoin, urlparse
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _plain_text(value: str) -> str:
+    """Reduce feed HTML (Google News summaries, CDATA markup) to readable text."""
+    text = _TAG_RE.sub(" ", str(value or ""))
+    return re.sub(r"\s+", " ", _html.unescape(text)).strip()
 
 from research_engine.raw_log import record_raw, record_raw_parts
 from research_engine.store import ResearchStore
@@ -161,13 +170,13 @@ async def fetch_rss(store: ResearchStore, job_id: int, feed_url: str, query_term
     terms = [term.lower() for term in query_terms if term.strip()]
     stored = []
     for entry in parsed.entries[: max(1, min(limit, 200))]:
-        title = str(entry.get("title", ""))
-        excerpt = str(entry.get("summary", entry.get("description", title)))
+        title = _plain_text(entry.get("title", ""))
+        excerpt = _plain_text(entry.get("summary", entry.get("description", title))) or title
         if terms and not any(term in f"{title} {excerpt}".lower() for term in terms):
             continue
         result = store.add_evidence(
             job_id, source_type="rss", url=str(entry.get("link", feed_url)), title=title,
-            excerpt=excerpt[:4000], author=str(entry.get("author", "")), published_at=_published(entry),
+            excerpt=excerpt[:4000], author=_plain_text(entry.get("author", "")), published_at=_published(entry),
             query=" OR ".join(query_terms), metadata={"feed_url": feed_url},
         )
         stored.append({**result, "title": title, "url": str(entry.get("link", feed_url))})
