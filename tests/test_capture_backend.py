@@ -301,6 +301,42 @@ class CaptureBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "No approved capture session"):
             self._network_capture(session["id"], key="expired")
 
+    # --- Standing per-domain consent -------------------------------------------------
+
+    def test_trusted_domain_auto_approves_only_matching_sessions(self):
+        # Validation: bare public domains only.
+        for bad in ("localhost", "1.2.3.4", "http://discord.com/x"):
+            with self.assertRaises(ValueError):
+                self.store.trust_domain(self.client_id, bad)
+        self.store.trust_domain(self.client_id, "discord.com")
+        self.assertEqual(["discord.com"], [d["domain"] for d in self.store.list_trusted_domains(self.client_id)])
+        # Subdomain matches the trust; unrelated host does not.
+        self.assertIsNotNone(self.store.is_domain_trusted(self.client_id, "gateway.discord.com"))
+        self.assertIsNone(self.store.is_domain_trusted(self.client_id, "evil.com"))
+
+        trusted = self.store.request_session(self.job_id, "discord.com", "reactions")
+        untrusted = self.store.request_session(self.job_id, "x.com", "reactions")
+        approved = self.store.auto_approve_for_client(self.client_id)
+        self.assertEqual(["discord.com"], [a["domain"] for a in approved])
+        self.assertEqual("approved", self.store.session_status(trusted["id"])["status"])
+        self.assertEqual("requested", self.store.session_status(untrusted["id"])["status"])
+        # The auto-approval is auditable as standing consent.
+        with connect(DATABASE_URL) as conn, conn.cursor() as cur:
+            cur.execute("SELECT details FROM browser_capture_audit WHERE event_type='session.approved' AND client_id=%s ORDER BY id DESC LIMIT 1", (self.client_id,))
+            self.assertTrue(cur.fetchone()["details"].get("standing_consent"))
+
+    def test_untrusting_a_domain_stops_auto_approval(self):
+        self.store.trust_domain(self.client_id, "discord.com")
+        self.assertTrue(self.store.untrust_domain(self.client_id, "discord.com")["removed"])
+        self.assertEqual([], self.store.list_trusted_domains(self.client_id))
+        self.store.request_session(self.job_id, "discord.com", "reactions")
+        self.assertEqual([], self.store.auto_approve_for_client(self.client_id))
+
+    def test_trust_requires_a_live_client(self):
+        self.store.revoke_client(self.client_id)
+        with self.assertRaises(PermissionError):
+            self.store.trust_domain(self.client_id, "discord.com")
+
 
 if __name__ == "__main__":
     unittest.main()

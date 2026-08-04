@@ -648,3 +648,108 @@ class CaptureStore:
             if _host_in_domain(host, row["domain"]):
                 return self._session_row(row)
         return None
+
+    # --- Standing per-domain consent -------------------------------------------------
+
+    def trust_domain(self, client_id: int, domain: str, max_payload_bytes: int = 131072) -> dict[str, Any]:
+        """Record a researcher's one-time standing consent to capture a domain hands-free."""
+        domain = _normalize_domain(domain)
+        cap = max(1024, min(int(max_payload_bytes), 1_048_576))
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM browser_clients WHERE id=%s AND revoked_at IS NULL", (client_id,))
+            if not cur.fetchone():
+                raise PermissionError("Browser client is invalid or revoked.")
+            cur.execute(
+                "SELECT id FROM capture_trusted_domains WHERE client_id=%s AND domain=%s AND revoked_at IS NULL",
+                (client_id, domain),
+            )
+            existing = cur.fetchone()
+            if existing:
+                cur.execute("UPDATE capture_trusted_domains SET max_payload_bytes=%s WHERE id=%s", (cap, existing["id"]))
+                trusted_id = existing["id"]
+            else:
+                cur.execute(
+                    "INSERT INTO capture_trusted_domains (client_id,domain,max_payload_bytes) VALUES (%s,%s,%s) RETURNING id",
+                    (client_id, domain, cap),
+                )
+                trusted_id = cur.fetchone()["id"]
+            cur.execute(
+                "INSERT INTO browser_capture_audit (client_id,event_type,details) VALUES (%s,'domain.trusted',%s)",
+                (client_id, json_value({"domain": domain})),
+            )
+            conn.commit()
+        return {"trusted_id": trusted_id, "domain": domain, "max_payload_bytes": cap}
+
+    def untrust_domain(self, client_id: int, domain: str) -> dict[str, Any]:
+        domain = _normalize_domain(domain)
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                "UPDATE capture_trusted_domains SET revoked_at=now() WHERE client_id=%s AND domain=%s AND revoked_at IS NULL",
+                (client_id, domain),
+            )
+            removed = cur.rowcount
+            if removed:
+                cur.execute(
+                    "INSERT INTO browser_capture_audit (client_id,event_type,details) VALUES (%s,'domain.untrusted',%s)",
+                    (client_id, json_value({"domain": domain})),
+                )
+            conn.commit()
+        return {"domain": domain, "removed": bool(removed)}
+
+    def list_trusted_domains(self, client_id: int) -> list[dict[str, Any]]:
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT domain, max_payload_bytes, created_at FROM capture_trusted_domains WHERE client_id=%s AND revoked_at IS NULL ORDER BY domain",
+                (client_id,),
+            )
+            rows = cur.fetchall()
+        return [{k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in row.items()} for row in rows]
+
+    def is_domain_trusted(self, client_id: int, host: str) -> dict[str, Any] | None:
+        for row in self.list_trusted_domains(client_id):
+            if _host_in_domain(host, row["domain"]):
+                return row
+        return None
+
+    def auto_approve_for_client(self, client_id: int, ttl_minutes: int = SESSION_MAX_TTL_MINUTES) -> list[dict[str, Any]]:
+        """Approve every 'requested' session whose domain this client has pre-trusted.
+
+        This is the standing-consent path: the researcher already opted the domain in, so the
+        extension can start these sessions without another click. Each session still gets its
+        own bounded TTL and is stoppable and audited (with standing_consent=true).
+        """
+        ttl = max(1, min(int(ttl_minutes), SESSION_MAX_TTL_MINUTES))
+        self.expire_sessions()
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM browser_clients WHERE id=%s AND revoked_at IS NULL", (client_id,))
+            if not cur.fetchone():
+                raise PermissionError("Browser client is invalid or revoked.")
+            cur.execute(
+                """SELECT s.* FROM capture_sessions s
+                   WHERE s.status='requested'
+                     AND EXISTS (
+                       SELECT 1 FROM capture_trusted_domains t
+                       WHERE t.client_id=%s AND t.revoked_at IS NULL
+                         AND (s.domain = t.domain OR s.domain LIKE '%%.' || t.domain))
+                   FOR UPDATE OF s""",
+                (client_id,),
+            )
+            requested = cur.fetchall()
+            approved = []
+            for row in requested:
+                cur.execute(
+                    """UPDATE capture_sessions
+                       SET status='approved', client_id=%s, approved_at=now(),
+                           expires_at=now() + make_interval(mins => %s)
+                       WHERE id=%s AND status='requested' RETURNING *""",
+                    (client_id, ttl, row["id"]),
+                )
+                updated = cur.fetchone()
+                if updated:
+                    self._audit_session(cur, updated["id"], client_id, "session.approved",
+                                        {"domain": updated["domain"], "job_id": updated["job_id"], "standing_consent": True})
+                    approved.append({"session_id": updated["id"], "job_id": updated["job_id"],
+                                     "domain": updated["domain"], "expires_at": updated["expires_at"].isoformat(),
+                                     "max_payload_bytes": updated["max_payload_bytes"]})
+            conn.commit()
+        return approved

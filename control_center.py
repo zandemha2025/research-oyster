@@ -397,6 +397,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(exc)}, 403)
             except Exception as exc:
                 self.send_json({"error": friendly_error(str(exc))}, 400)
+        elif parsed.path == "/api/capture/trusted-domains":
+            try:
+                store, client = self.capture_client()
+                self.send_json(store.list_trusted_domains(client["client_id"]))
+            except PermissionError as exc:
+                self.send_json({"error": str(exc)}, 403)
+            except Exception as exc:
+                self.send_json({"error": friendly_error(str(exc))}, 400)
         elif parsed.path == "/api/capture/jobs":
             try:
                 _, _client = self.capture_client()
@@ -544,6 +552,14 @@ class Handler(BaseHTTPRequestHandler):
                 store, client = self.capture_client()
                 session_id = int(parsed.path.split("/")[4])
                 self.send_json(store.stop_session(session_id, client_id=client["client_id"]))
+            elif parsed.path == "/api/capture/trusted-domains":
+                store, client = self.capture_client()
+                if payload.get("approved_by_user") is not True:
+                    raise ValueError("Explicit user approval is required to trust a domain.")
+                self.send_json(store.trust_domain(client["client_id"], str(payload.get("domain", ""))), 201)
+            elif parsed.path == "/api/capture/sessions/auto-approve":
+                store, client = self.capture_client()
+                self.send_json({"approved": store.auto_approve_for_client(client["client_id"])})
             else:
                 self.send_json({"error": "Not found"}, 404)
         except PermissionError as exc:
@@ -567,6 +583,10 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path.startswith("/api/capture/evidence/"):
                 capture_id = int(parsed.path.split("/")[4])
                 self.send_json(store.delete_capture(capture_id, client["client_id"]))
+            elif parsed.path.startswith("/api/capture/trusted-domains/"):
+                from urllib.parse import unquote
+                domain = unquote(parsed.path.split("/", 4)[4])
+                self.send_json(store.untrust_domain(client["client_id"], domain))
             else:
                 self.send_json({"error": "Not found"}, 404)
         except PermissionError as exc:

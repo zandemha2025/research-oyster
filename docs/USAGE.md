@@ -90,6 +90,8 @@ For evidence that lives in a page's network responses rather than its visible te
 
 This is supervised and audited, but capturing platform traffic may breach that platform's terms of service — see `DISCLAIMER.md`.
 
+To avoid approving every session, **trust a domain once** (extension settings, or "Always capture this domain" when approving). Future sessions on that domain then auto-approve and start recording on tabs you already have open — still time-limited, stoppable, revocable, and audited. It never runs unattended or drives the browser; capture happens only in your signed-in browser on pages you open.
+
 ## Supervised browser capture
 
 The extension has two collection actions:

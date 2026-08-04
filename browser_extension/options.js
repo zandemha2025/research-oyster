@@ -4,7 +4,49 @@ document.addEventListener("DOMContentLoaded",async()=>{
   const s=await chrome.storage.local.get({baseUrl:"http://127.0.0.1:8765",token:"",anonymize:true,maxCandidates:25});
   $("#baseUrl").value=s.baseUrl; $("#anonymize").checked=s.anonymize; $("#maxCandidates").value=s.maxCandidates;
   $("#pair").onclick=pair; $("#unpair").onclick=unpair; $("#save").onclick=save;
+  $("#trust").onclick=trust;
+  loadTrusted();
 });
+
+async function api(path,options={}){
+  const s=await chrome.storage.local.get({baseUrl:"http://127.0.0.1:8765",token:""});
+  if(!s.token) throw new Error("Pair this browser first.");
+  const base=OysterCaptureCore.normalizeBaseUrl(s.baseUrl);
+  const r=await fetch(`${base}${path}`,{...options,headers:{"Content-Type":"application/json","Authorization":`Bearer ${s.token}`,...(options.headers||{})}});
+  if(!r.ok){const b=await r.json().catch(()=>({}));throw new Error(b.error||b.detail||`Oyster returned ${r.status}.`);}
+  return r.status===204?null:r.json();
+}
+async function loadTrusted(){
+  const el=$("#trustedList");
+  const s=await chrome.storage.local.get({token:""});
+  if(!s.token){el.textContent="Pair the browser to manage trusted domains.";return;}
+  try{
+    const domains=await api("/api/capture/trusted-domains");
+    if(!domains.length){el.innerHTML='<p class="muted">No trusted domains yet.</p>';return;}
+    el.innerHTML=domains.map(d=>`<div class="row"><span>${escapeHtml(d.domain)}</span><button class="danger untrust" data-domain="${escapeHtml(d.domain)}">Remove</button></div>`).join("");
+    el.querySelectorAll(".untrust").forEach(b=>b.onclick=()=>untrust(b.dataset.domain));
+  }catch(e){el.innerHTML=`<p class="notice error">${escapeHtml(e.message)}</p>`;}
+}
+async function trust(){
+  try{
+    const domain=$("#trustDomain").value.trim().toLowerCase().replace(/^https?:\/\//,"").replace(/\/.*$/,"");
+    if(!domain||!domain.includes(".")) throw new Error("Enter a bare domain such as discord.com.");
+    // Chrome's own host-permission prompt is a second, independent consent for this domain.
+    const granted=await chrome.permissions.request({origins:[`https://${domain}/*`,`https://*.${domain}/*`]});
+    if(!granted) throw new Error("Domain permission was declined, so nothing will be captured.");
+    await api("/api/capture/trusted-domains",{method:"POST",body:JSON.stringify({domain,approved_by_user:true})});
+    $("#trustDomain").value="";notice(`Oyster can now capture ${domain} hands-free while you browse it.`,"success");
+    loadTrusted();
+  }catch(e){notice(e.message,"error");}
+}
+async function untrust(domain){
+  try{
+    await api(`/api/capture/trusted-domains/${encodeURIComponent(domain)}`,{method:"DELETE"});
+    try{await chrome.permissions.remove({origins:[`https://${domain}/*`,`https://*.${domain}/*`]});}catch(_){}
+    notice(`Stopped trusting ${domain}.`,"success");loadTrusted();
+  }catch(e){notice(e.message,"error");}
+}
+function escapeHtml(v){const d=document.createElement("div");d.textContent=String(v==null?"":v);return d.innerHTML;}
 async function pair(){
   try{
     const baseUrl=OysterCaptureCore.normalizeBaseUrl($("#baseUrl").value); const code=$("#code").value.trim();

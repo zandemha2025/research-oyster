@@ -36,6 +36,15 @@ Beyond selecting and scanning visible text, the extension can capture the networ
 - The recorder runs in the page's own context and reads only response bodies the page already received. It never reads cookies, request headers, passwords, or session tokens. Because the page already controls its own network payloads, a page that forged the internal capture message would gain no capability it did not already have; the server still enforces the domain, session, and size limits.
 - Captured payloads are stored redacted in `raw_responses`; the evidence row keeps only a bounded summary, never the raw body.
 
+### Standing per-domain consent
+
+To remove the per-session click without becoming an unattended scraper, a researcher can trust a domain once:
+
+- Trusting a domain requires the extension's Bearer token **and** `approved_by_user: true`, plus Chrome's own host-permission prompt for that domain — the same double consent as a single session, paid once.
+- Trust is stored per browser client, is revocable at any time, and every trust/untrust and every auto-approved session is written to the capture audit log (auto-approvals carry `standing_consent: true`).
+- A trusted domain only lets the extension **auto-approve session requests and start recording on tabs the user already has open** on that domain. It never opens or navigates tabs, never runs headless, and never captures while collection is stopped. Each auto-approved session still has its own 30-minute TTL and Stop control, and the server re-validates every submission against a live session.
+- This is a convenience over an action the authenticated client is already permitted to perform (approving its own sessions); it does not widen what can be captured, only how often the human must click.
+
 The web connector rejects non-HTTP(S), localhost, private, reserved, and non-global targets and revalidates redirect destinations. This reduces SSRF risk but is not a substitute for network isolation in a hosted deployment; DNS rebinding and parser/browser vulnerabilities remain infrastructure concerns.
 
 ## Reporting a vulnerability

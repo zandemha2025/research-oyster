@@ -22,7 +22,17 @@ chrome.runtime.onInstalled.addListener(async () => {
     title: "Review in Research Oyster",
     contexts: ["selection"]
   });
+  ensureAutoApproveAlarm();
 });
+
+chrome.runtime.onStartup.addListener(ensureAutoApproveAlarm);
+
+function ensureAutoApproveAlarm() {
+  // Standing-consent poll: checks for session requests on domains the user pre-trusted and
+  // starts recording them hands-free. Only acts when a token exists; capture still happens
+  // only in this browser on pages the user has open.
+  chrome.alarms.create("oyster-autoapprove", { periodInMinutes: 1 });
+}
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== "save-to-oyster" || !info.selectionText || !tab?.id) return;
@@ -79,6 +89,10 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     }
     if (message.type === "SESSION_STOP") {
       await stopSession(message.session_id, "user");
+      return { ok: true };
+    }
+    if (message.type === "AUTO_APPROVE") {
+      await autoApproveTick();
       return { ok: true };
     }
     if (message.type === "SESSION_NET_CAPTURE") {
@@ -183,14 +197,62 @@ async function stopSession(sessionId, reason) {
       method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: "{}"
     });
   } catch (_) { /* server may already have ended it */ }
-  if (activeSession && activeSession.domain) {
+  // Keep the Chrome host permission for a standing-consent (trusted) domain; the user removes
+  // it explicitly via Unpair or by removing the trusted domain in settings.
+  if (activeSession && activeSession.domain && !activeSession.standing) {
     try { await chrome.permissions.remove({ origins: [`https://${activeSession.domain}/*`, `https://*.${activeSession.domain}/*`] }); } catch (_) {}
   }
   chrome.alarms.clear(`oyster-session-${sessionId}`);
   await chrome.storage.local.set({ activeSession: null });
 }
 
+// Standing-consent auto-approve: approve trusted-domain session requests and start recording
+// on any open tab already on that domain. Never opens or navigates tabs itself.
+async function autoApproveTick() {
+  const { token, collectionStopped } = await chrome.storage.local.get({ token: "", collectionStopped: false });
+  if (!token || collectionStopped) return;
+  let approved = [];
+  try {
+    const { base } = await apiBase();
+    const r = await fetch(`${base}/api/capture/sessions/auto-approve`, {
+      method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: "{}"
+    });
+    if (!r.ok) return;
+    approved = (await r.json()).approved || [];
+  } catch (_) { return; }
+  for (const session of approved) await startTrustedSession(session);
+}
+
+async function startTrustedSession(session) {
+  const active = {
+    id: session.session_id, domain: session.domain, jobId: session.job_id,
+    maxPayloadBytes: session.max_payload_bytes || 131072, expiresAt: session.expires_at,
+    seen: [], standing: true
+  };
+  await chrome.storage.local.set({ activeSession: active });
+  const expiresMs = Date.parse(session.expires_at || "") || (Date.now() + 30 * 60000);
+  chrome.alarms.create(`oyster-session-${active.id}`, { when: expiresMs });
+  // Inject into tabs already open on the trusted domain (permission was granted at trust time).
+  try {
+    const tabs = await chrome.tabs.query({ url: [`https://${active.domain}/*`, `https://*.${active.domain}/*`] });
+    for (const tab of tabs) { if (tab.id) await injectRecorder(tab.id, active).catch(() => {}); }
+  } catch (_) { /* no matching tab open yet; onUpdated will inject on navigation */ }
+}
+
+// Keep capturing as the user navigates within an active session's domain.
+chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
+  if (info.status !== "complete" || !tab?.url) return;
+  const { activeSession, collectionStopped } = await chrome.storage.local.get({ activeSession: null, collectionStopped: false });
+  if (!activeSession || collectionStopped) return;
+  let host = "";
+  try { host = new URL(tab.url).hostname; } catch (_) { return; }
+  if (OysterCaptureCore.domainMatches(host, activeSession.domain)) {
+    injectRecorder(tabId, activeSession).catch(() => {});
+  }
+});
+
 chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm.name === "oyster-autoapprove") { autoApproveTick(); return; }
   const match = /^oyster-session-(\d+)$/.exec(alarm.name || "");
   if (match) stopSession(Number(match[1]), "expired");
 });

@@ -170,6 +170,28 @@ class CaptureHTTPAcceptanceTests(unittest.TestCase):
         after = self.request("POST", "/api/capture/approve", {**payload, "approved_by_user": True, "client_capture_id": "net-http-2"}, self.auth())
         self.assertEqual(403, after[0])
 
+    def test_standing_consent_trusts_domain_and_auto_approves(self):
+        # Trusting a domain requires explicit user consent.
+        denied = self.request("POST", "/api/capture/trusted-domains", {"domain": "discord.com"}, self.auth())
+        self.assertEqual(400, denied[0])
+        trusted = self.request("POST", "/api/capture/trusted-domains", {"domain": "discord.com", "approved_by_user": True}, self.auth())
+        self.assertEqual(201, trusted[0])
+        listed = self.request("GET", "/api/capture/trusted-domains", None, self.auth())
+        self.assertIn("discord.com", [d["domain"] for d in listed[1]])
+
+        # A later session request on the trusted domain auto-approves without another click.
+        from research_engine.capture import CaptureStore
+        session = CaptureStore(self.database_url).request_session(self.job_id, "discord.com", "reactions")
+        auto = self.request("POST", "/api/capture/sessions/auto-approve", {}, self.auth())
+        self.assertEqual(200, auto[0])
+        self.assertIn("discord.com", [a["domain"] for a in auto[1]["approved"]])
+        self.assertEqual("approved", CaptureStore(self.database_url).session_status(session["id"])["status"])
+
+        # Untrusting stops future auto-approval.
+        removed = self.request("DELETE", "/api/capture/trusted-domains/discord.com", None, self.auth())
+        self.assertTrue(removed[1]["removed"])
+        self.assertEqual([], self.request("GET", "/api/capture/trusted-domains", None, self.auth())[1])
+
 
 if __name__ == "__main__":
     unittest.main()

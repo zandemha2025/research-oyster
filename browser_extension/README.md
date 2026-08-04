@@ -30,6 +30,17 @@ Some evidence lives in the JSON a page loads over the network rather than in the
 
 The server independently re-checks every submission against the approved session; the extension's checks are convenience, not the security boundary. Approved-session capture may violate a platform's terms of service and can put your account at risk — you are responsible for confirming a site is permitted for your purpose. See the repository `DISCLAIMER.md` and `SECURITY.md`.
 
+### Standing per-domain consent (approve once)
+
+If you don't want to approve every session, trust a domain once — in the extension **settings** page, or by ticking **Always capture this domain** when you approve a session:
+
+1. Trusting a domain asks for Chrome's host permission for that domain (a second consent) and records the standing consent with Oyster.
+2. After that, when the agent requests a session for that domain, the extension **auto-approves it and starts recording on tabs you already have open there** — no click. It never opens or navigates pages for you and never runs headless.
+3. Each auto-started session still has a 30-minute limit and a **Stop** control, and everything is audited.
+4. Remove a trusted domain any time in settings; unpairing clears them all.
+
+This is a convenience over approving your own sessions — it does not widen what can be captured, and capture still happens only in your signed-in browser on pages you open.
+
 ## Expected local API
 
 The service must listen only on loopback. The extension rejects remote and HTTPS configuration values by design because the initial local service contract is plain HTTP.
@@ -44,6 +55,10 @@ The service must listen only on loopback. The extension rejects remote and HTTPS
 | `POST` | `/api/capture/sessions/{id}/approve` | Approve a session. Requires `approved_by_user: true`; optional `ttl_minutes` (max 30). |
 | `POST` | `/api/capture/sessions/{id}/decline` | Decline a pending session request. |
 | `POST` | `/api/capture/sessions/{id}/stop` | Stop an active session immediately. |
+| `GET` | `/api/capture/trusted-domains` | List domains this client has given standing consent to. |
+| `POST` | `/api/capture/trusted-domains` | Trust a domain. Requires `approved_by_user: true`. |
+| `DELETE` | `/api/capture/trusted-domains/{domain}` | Revoke standing consent for a domain. |
+| `POST` | `/api/capture/sessions/auto-approve` | Approve all requested sessions on this client's trusted domains. |
 
 All authenticated endpoints use `Authorization: Bearer <pairing token>`. The API should enforce Origin allowlisting for the installed extension ID, constant-time token comparison, request/body limits, capture rate limits, job authorization, token revocation, and audit events. It must not return platform credentials to the browser.
 

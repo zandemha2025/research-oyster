@@ -25,6 +25,7 @@ async function init() {
 
 async function loadSessions() {
   if (!state.token) return;
+  try { await chrome.runtime.sendMessage({ type: "AUTO_APPROVE" }); } catch (_) { /* worker asleep */ }
   try {
     const requests = await api("/api/capture/sessions");
     renderSessionRequests(Array.isArray(requests) ? requests : []);
@@ -40,8 +41,9 @@ function renderSessionRequests(sessions) {
   el.innerHTML = pending.map(s => `<article class="card">
     <div class="meta"><strong>${escapeHtml(s.domain)}</strong> · job ${escapeHtml(s.job_id)}</div>
     <div class="meta">${escapeHtml(s.reason || "")}</div>
+    <label class="toggle"><input type="checkbox" class="session-always" data-id="${escapeHtml(s.id)}"><span>Always capture ${escapeHtml(s.domain)} (approve once)</span></label>
     <div class="actions"><button class="secondary session-approve" data-id="${escapeHtml(s.id)}" data-domain="${escapeHtml(s.domain)}" data-job="${escapeHtml(s.job_id)}">Approve (30 min)</button><button class="danger session-decline" data-id="${escapeHtml(s.id)}">Decline</button></div></article>`).join("");
-  document.querySelectorAll(".session-approve").forEach(b => b.onclick = () => approveSession(b.dataset.id));
+  document.querySelectorAll(".session-approve").forEach(b => b.onclick = () => approveSession(b.dataset.id, b.dataset.domain));
   document.querySelectorAll(".session-decline").forEach(b => b.onclick = () => declineSession(b.dataset.id));
 }
 
@@ -55,15 +57,22 @@ function renderActiveSession(session) {
   el.querySelector(".session-stop").onclick = () => stopSession(session.id);
 }
 
-async function approveSession(sessionId) {
+async function approveSession(sessionId, domain) {
   setBusy(true);
   try {
+    const always = document.querySelector(`.session-always[data-id="${sessionId}"]`)?.checked;
+    if (always && domain) {
+      // Standing consent: Chrome's own host prompt is a second consent for the domain.
+      const granted = await chrome.permissions.request({ origins: [`https://${domain}/*`, `https://*.${domain}/*`] });
+      if (granted) await api("/api/capture/trusted-domains", { method: "POST", body: JSON.stringify({ domain, approved_by_user: true }) });
+    }
     const result = await api(`/api/capture/sessions/${encodeURIComponent(sessionId)}/approve`, {
       method: "POST", body: JSON.stringify({ approved_by_user: true, ttl_minutes: 30 })
     });
     const response = await chrome.runtime.sendMessage({ type: "SESSION_START", session: result });
     if (!response?.ok) throw new Error(response?.error || "Could not start recording on this domain.");
-    show(`Recording ${result.domain} until the session ends. Nothing else is captured.`, "success");
+    const suffix = always ? " Future sessions on this domain will start hands-free." : "";
+    show(`Recording ${result.domain} until the session ends.${suffix}`, "success");
     await loadSessions();
   } catch (error) { show(error.message, "error"); }
   finally { setBusy(false); }

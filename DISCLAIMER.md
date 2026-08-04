@@ -10,6 +10,8 @@ Automated Discord message collection requires an authorized bot installed in the
 
 Approved-session traffic capture records the network responses a page you are viewing already receives, but only after you explicitly approve a time-limited session for one named domain. This is a convenience over copying text by hand from pages you can already access — it is not permission to automate a platform. Many platforms, including Discord and X, restrict or prohibit automated collection of their API responses in their terms of service, and using it can put your account at risk. You are responsible for confirming that capturing a given site is permitted for your purpose, for keeping sessions narrow and short, and for retaining only what you are authorized to keep. Do not use it to bypass a platform's technical or contractual protections.
 
+Standing per-domain consent lets you approve a domain once so later sessions on it start without another click. It is still supervised, not unattended: capture happens only in your own signed-in browser, only on pages you open yourself, and each session remains time-limited and stoppable. It does not open or navigate pages, run headless, or collect while you are away. Trusting a domain does not change what a platform's terms permit — the same responsibility to confirm the collection is allowed, keep it minimal, and honor privacy obligations applies, and you should revoke the trust when you no longer need it.
+
 An Apify token provides access to a platform, not blanket permission to collect every target. Review each Actor's code, owner, inputs, output handling, price, license, and target-site compliance before use. Official API access is preferable when it meets the research need.
 
 ## Privacy and human impact
