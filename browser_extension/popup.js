@@ -19,6 +19,11 @@ async function init() {
     if (changes.localCandidates || changes.notice) { state = await chrome.storage.local.get(defaults); renderQueue(); renderNotice(); }
     if (changes.activeSession) renderActiveSession(changes.activeSession.newValue);
   });
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    state.currentUrl = tab?.url || "";
+    try { state.currentHost = new URL(state.currentUrl).hostname; } catch (_) { state.currentHost = ""; }
+  } catch (_) { state.currentHost = ""; }
   renderStatus(); renderQueue(); renderNotice();
   if (state.token) { await loadJobs(); await loadSessions(); }
 }
@@ -32,6 +37,40 @@ async function loadSessions() {
   } catch (error) { /* non-fatal: sessions are optional */ }
   const { activeSession } = await chrome.storage.local.get({ activeSession: null });
   renderActiveSession(activeSession);
+  renderCaptureNow(activeSession);
+}
+
+function renderCaptureNow(activeSession) {
+  const el = document.getElementById("captureNow");
+  const pill = document.getElementById("captureState");
+  if (!el) return;
+  if (activeSession && activeSession.id) {
+    if (pill) { pill.textContent = "Recording"; pill.className = "pill good"; }
+    el.innerHTML = "";  // active state is shown by renderActiveSession (with Stop)
+    return;
+  }
+  if (pill) { pill.textContent = "Off"; pill.className = "pill neutral"; }
+  const host = state.currentHost || "";
+  if (!state.activeJobId) { el.innerHTML = '<p class="muted">Pick a research job above to enable capture.</p>'; return; }
+  if (!host || !/^https?:/.test(state.currentUrl || "")) { el.innerHTML = '<p class="muted">Open the site you want to capture in this tab.</p>'; return; }
+  el.innerHTML = `<button id="startCapture" class="primary">Start capturing ${escapeHtml(host)}</button>`;
+  document.getElementById("startCapture").onclick = () => startCaptureThisSite(host);
+}
+
+async function startCaptureThisSite(host) {
+  setBusy(true);
+  try {
+    const granted = await chrome.permissions.request({ origins: [`https://${host}/*`, `https://*.${host}/*`] });
+    if (!granted) throw new Error("Chrome permission was declined, so nothing will be captured.");
+    const result = await api("/api/capture/sessions/start", {
+      method: "POST", body: JSON.stringify({ job_id: Number(state.activeJobId), domain: host, approved_by_user: true })
+    });
+    const response = await chrome.runtime.sendMessage({ type: "SESSION_START", session: result });
+    if (!response?.ok) throw new Error(response?.error || "Could not start recording on this site.");
+    show(`Recording ${result.domain} for 30 minutes. Browse normally; click Stop any time.`, "success");
+    await loadSessions();
+  } catch (error) { show(error.message, "error"); }
+  finally { setBusy(false); }
 }
 
 function renderSessionRequests(sessions) {

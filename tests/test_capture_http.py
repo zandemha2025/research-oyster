@@ -192,6 +192,16 @@ class CaptureHTTPAcceptanceTests(unittest.TestCase):
         self.assertTrue(removed[1]["removed"])
         self.assertEqual([], self.request("GET", "/api/capture/trusted-domains", None, self.auth())[1])
 
+    def test_human_start_endpoint_requires_consent_and_returns_approved_session(self):
+        denied = self.request("POST", "/api/capture/sessions/start", {"job_id": self.job_id, "domain": "discord.com"}, self.auth())
+        self.assertEqual(400, denied[0])
+        started = self.request("POST", "/api/capture/sessions/start",
+                               {"job_id": self.job_id, "domain": "discord.com", "approved_by_user": True}, self.auth())
+        self.assertEqual(201, started[0])
+        self.assertEqual("discord.com", started[1]["domain"])
+        from research_engine.capture import CaptureStore
+        self.assertEqual("approved", CaptureStore(self.database_url).session_status(started[1]["session_id"])["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

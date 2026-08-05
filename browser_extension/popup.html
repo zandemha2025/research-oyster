@@ -29,11 +29,12 @@
         <button id="stop" class="danger">Stop</button>
       </div>
     </section>
-    <section aria-labelledby="sessions-title">
-      <h2 id="sessions-title">Traffic capture requests</h2>
-      <p class="muted">Oyster is asking to capture network data on a page you approve. Nothing is recorded until you approve, and only for the one domain and time window shown.</p>
-      <div id="sessionRequests"></div>
+    <section aria-labelledby="capture-title">
+      <div class="section-head"><h2 id="capture-title">Network capture</h2><span id="captureState" class="pill neutral">Off</span></div>
+      <p class="muted">Capture the data a page loads while you're signed in (Discord, X, Twitch chat). Pick a research job above, then start it on the site you're viewing.</p>
+      <div id="captureNow"></div>
       <div id="activeSession" hidden></div>
+      <div id="sessionRequests"></div>
     </section>
     <section aria-labelledby="queue-title">
       <div class="section-head"><h2 id="queue-title">Review queue <span id="count">0</span></h2><button id="clear" class="text-button">Clear all</button></div>

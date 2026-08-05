@@ -91,7 +91,7 @@ Reopen it any time with `Open Gaming Pulse.command` (macOS) or `python control_c
 
 ### 7. Sources behind a login, without API keys (optional)
 
-For data on pages you're already signed into — a Discord server you're in, X, etc. — the **Research Oyster Capture** browser extension captures what those pages load, with your approval. Load it once (Chrome/Edge → Extensions → Developer mode → Load unpacked → `browser_extension`), pair it with a one-time code from the dashboard, and either approve each capture or trust a domain once so it captures hands-free while you browse. See [docs/USAGE.md](docs/USAGE.md) and [browser_extension/README.md](browser_extension/README.md).
+For data on pages you're already signed into — a Discord server you're in, X, etc. — the **Research Oyster Capture** browser extension captures what those pages load, with your approval. The dashboard's **"Set up browser capture"** panel walks you through it: it shows the exact folder to load (Chrome/Edge → Extensions → Developer mode → Load unpacked), the pairing code, and whether a browser is connected. Then in the extension popup you pick a job and click **Start capturing this site** — that's the on-switch; your click is the approval and it records that one site for 30 minutes or until you press Stop. You can also trust a domain once so it starts hands-free. (Chrome can't auto-install an unpacked extension, so loading it once is manual; see [browser_extension/README.md](browser_extension/README.md).) See also [docs/USAGE.md](docs/USAGE.md).
 
 ## Source support
 

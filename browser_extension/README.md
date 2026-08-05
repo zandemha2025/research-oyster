@@ -2,6 +2,18 @@
 
 This Chrome/Edge Manifest V3 extension creates a supervised bridge between pages a researcher is already allowed to view and an active Research Oyster brief. It never joins communities, reads cookies or passwords, bypasses permissions, or silently uploads page content.
 
+## How this fits with the rest of Oyster
+
+Research Oyster has three parts. The one-line installer sets up the first two; this extension is the optional third:
+
+1. **Your AI host** (Claude Code / Codex) — where you ask for research in plain English.
+2. **The control center** — the local dashboard the installer opens; it has a **"Set up browser capture"** panel that shows the exact folder to load below, the pairing code, and whether a browser is connected.
+3. **This extension** — only needed to capture pages you're logged into (Discord, X, Twitch chat) without API keys.
+
+**From zero to a capture:** run the installer → the dashboard opens → follow its "Set up browser capture" panel to load this folder and pair → in the extension popup, pick a research job and click **Start capturing this site**. That Start button is the on-switch: your click is the approval, it records that one site for 30 minutes (or until you press Stop), and the session shows up on the dashboard.
+
+> **Why isn't this just one click?** Chrome does not allow any installer or script to add an unpacked extension automatically — that is a browser security rule. The only way to remove the manual "Load unpacked" step entirely is to publish the extension to the Chrome Web Store (which requires a Google developer account and review). Until then, loading it once from this folder is unavoidable; the dashboard walks you through it.
+
 ## Install from source
 
 1. Start Research Oyster and open its capture/onboarding screen to create a one-time pairing code.

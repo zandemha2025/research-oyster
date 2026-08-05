@@ -337,6 +337,17 @@ class CaptureBackendTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.store.trust_domain(self.client_id, "discord.com")
 
+    def test_start_session_creates_and_approves_in_one_step(self):
+        # The human-initiated on-switch: one call yields an approved session ready to record.
+        result = self.store.start_session(self.client_id, self.job_id, "discord.com")
+        self.assertEqual("discord.com", result["domain"])
+        self.assertIn("session_id", result)
+        self.assertEqual("approved", self.store.session_status(result["session_id"])["status"])
+        # A capture under it is accepted immediately.
+        self._network_capture(result["session_id"], key="human-start")
+        self.assertEqual("discord",
+                         [e for e in ResearchStore(DATABASE_URL).dossier(self.job_id)["evidence"]][0]["source_type"])
+
 
 if __name__ == "__main__":
     unittest.main()
