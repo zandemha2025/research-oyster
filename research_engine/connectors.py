@@ -35,7 +35,7 @@ from research_engine.store import ResearchStore
 # and not_configured() both read from here so guidance never drifts between the two.
 CONNECTOR_GUIDES: dict[str, dict[str, Any]] = {
     "apify": {
-        "enables": ["Reddit", "X scraping alternative", "web/community discovery", "arbitrary Actors"],
+        "enables": ["Reddit", "X/tweet scraping (use a tweet/search actor, not a profile scraper)", "web/community discovery", "arbitrary Actors"],
         "setup": "Paste APIFY_TOKEN in Setup (optional — Reddit and web work without it).",
         "fallbacks": [
             "search_reddit / fetch_reddit_thread for Reddit discussion (free, no key)",
@@ -46,17 +46,18 @@ CONNECTOR_GUIDES: dict[str, dict[str, Any]] = {
     "x_official": {
         "setup": "Paste X_BEARER_TOKEN in Setup; X charges per API usage.",
         "fallbacks": [
+            "run_apify_actor with a TWEET/SEARCH actor (e.g. apidojo/tweet-scraper) and searchTerms input, source_type='x' — this returns tweet TEXT. Do NOT use a profile/user scraper, which returns only account metadata (followers, handles) and no post content.",
             "search_web for the topic to find where it is discussed publicly",
             "search_reddit — much of the same conversation happens on Reddit, for free",
             "crawl_web_page on public posts, threads, or news coverage",
         ],
     },
     "twitch": {
-        "setup": "Add a Twitch developer Client ID and Client Secret in Setup.",
+        "setup": "Add a Twitch developer Client ID and Client Secret in Setup (only needed for channel/category SEARCH; reading chat needs nothing).",
         "fallbacks": [
-            "search_web / search_reddit for what viewers say about the streams (live chat itself is not autonomously retrievable)",
+            "read_twitch_chat(channel) — read a channel's LIVE chat via anonymous IRC, no credentials required",
+            "search_web / search_reddit for what viewers say about the streams",
             "crawl_web_page on public stats pages such as twitchtracker.com or sullygnome.com",
-            "get_browser_capture_mission only if the researcher needs live chat from a stream they are watching",
         ],
     },
     "kick": {
@@ -686,3 +687,107 @@ async def fetch_reddit_thread(store: ResearchStore, job_id: int, url: str, max_c
                        "excerpt": excerpt})
     return {"url": thread_url, "title": title, "subreddit": subreddit, "post_stored": bool(post),
             "comments_stored": len(comments), "items": stored, "raw_response_id": raw_id}
+
+
+# --- Twitch live chat via anonymous IRC ---------------------------------------
+# Twitch live chat IS autonomously retrievable: anyone can read any channel's chat over
+# IRC with an anonymous "justinfan" nick — no Client ID, no OAuth. This is the legit,
+# no-credential path that replaces the old "live chat is not autonomously retrievable"
+# defeatism.
+_TWITCH_IRC_HOST = "irc.chat.twitch.tv"
+_TWITCH_IRC_PORT = 6667
+
+
+def _parse_irc_line(line: str) -> dict[str, Any] | None:
+    """Parse one raw Twitch IRC line. Pure and testable.
+
+    Returns {"ping": token} for a PING (caller must PONG), {"user", "text"} for a chat
+    message (PRIVMSG), or None for anything else (JOIN, server notices, etc.).
+    """
+    line = line.rstrip("\r\n")
+    if not line:
+        return None
+    if line.startswith("PING"):
+        return {"ping": line.split(" ", 1)[1] if " " in line else ":tmi.twitch.tv"}
+    if line.startswith("@"):  # strip optional IRCv3 tags
+        _, _, line = line.partition(" ")
+    if " PRIVMSG " not in line:
+        return None
+    prefix, _, rest = line.partition(" PRIVMSG ")
+    nick = prefix[1:].split("!", 1)[0].strip() if prefix.startswith(":") else prefix.split("!", 1)[0].strip()
+    _, _, message = rest.partition(" :")
+    message = message.strip()
+    if not nick or not message:
+        return None
+    return {"user": nick, "text": message}
+
+
+def _read_twitch_chat_blocking(channel: str, seconds: int, limit: int) -> tuple[list[dict[str, Any]], str]:
+    """Anonymous read of a channel's live IRC chat. Blocking — run in a worker thread."""
+    import time as _time
+
+    channel = channel.lstrip("#").lower().strip()
+    messages: list[dict[str, Any]] = []
+    transcript: list[str] = []
+    sock = socket.create_connection((_TWITCH_IRC_HOST, _TWITCH_IRC_PORT), timeout=10)
+    try:
+        sock.settimeout(2.0)
+        nick = f"justinfan{(abs(hash(channel)) % 80000) + 1000}"
+        sock.sendall(f"PASS SCHMOOPIIE\r\nNICK {nick}\r\nJOIN #{channel}\r\n".encode())
+        deadline = _time.monotonic() + max(2, min(seconds, 30))
+        buffer = ""
+        while _time.monotonic() < deadline and len(messages) < limit:
+            try:
+                chunk = sock.recv(4096).decode("utf-8", "replace")
+            except socket.timeout:
+                continue
+            if not chunk:
+                break
+            buffer += chunk
+            while "\r\n" in buffer:
+                raw, buffer = buffer.split("\r\n", 1)
+                transcript.append(raw)
+                parsed = _parse_irc_line(raw)
+                if not parsed:
+                    continue
+                if "ping" in parsed:
+                    sock.sendall(f"PONG {parsed['ping']}\r\n".encode())
+                elif "text" in parsed:
+                    messages.append(parsed)
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+    return messages, "\n".join(transcript)
+
+
+async def read_twitch_chat(store: ResearchStore, job_id: int, channel: str,
+                           seconds: int = 8, limit: int = 200) -> dict[str, Any]:
+    """Read a Twitch channel's LIVE chat via anonymous IRC (no credentials). Stores each
+    chat message as evidence. An empty result usually means the channel is offline or chat
+    was quiet during the listening window — that is 'attempted, no usable data', not a
+    missing capability."""
+    import anyio
+
+    channel = (channel or "").lstrip("#").strip()
+    if not channel:
+        raise ValueError("Provide a Twitch channel name, for example 'xqc'.")
+    messages, transcript = await anyio.to_thread.run_sync(
+        lambda: _read_twitch_chat_blocking(channel, seconds, limit)
+    )
+    raw_id = record_raw_parts(
+        store.database_url, job_id, "research.twitch_chat", "twitch_irc",
+        method="IRC", url=f"irc://{_TWITCH_IRC_HOST}/#{channel.lower()}", status=200,
+        content=transcript.encode("utf-8", "replace"),
+    )
+    stored = []
+    for message in messages:
+        row = store.add_evidence(
+            job_id, source_type="twitch_chat", url=f"https://twitch.tv/{channel.lower()}",
+            title=f"Twitch #{channel.lower()} chat", excerpt=message["text"],
+            author=message["user"], query=channel,
+            metadata={"channel": channel.lower(), "raw_response_id": raw_id},
+        )
+        stored.append({"user": message["user"], "text": message["text"], "evidence_id": row["evidence_id"]})
+    return {"channel": channel.lower(), "matched": len(stored), "items": stored, "raw_response_id": raw_id}

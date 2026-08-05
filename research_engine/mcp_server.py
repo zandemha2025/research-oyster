@@ -13,6 +13,7 @@ from research_engine.connectors import read_discord_channel as read_discord_conn
 from research_engine.connectors import run_apify_actor as run_apify_connector
 from research_engine.connectors import search_kick as search_kick_connector
 from research_engine.connectors import search_twitch as search_twitch_connector
+from research_engine.connectors import read_twitch_chat as read_twitch_chat_connector
 from research_engine.connectors import crawl_web_page as crawl_web_connector
 from research_engine.connectors import search_web as search_web_connector
 from research_engine.connectors import discover_sources as discover_sources_connector
@@ -172,6 +173,18 @@ async def search_twitch(job_id: int, query: str, limit: int = 40) -> dict[str, A
     """Search arbitrary Twitch channels and categories rather than a fixed game watchlist."""
     return await _tracked("twitch", job_id, query,
                           search_twitch_connector(store, job_id, settings.twitch_client_id, settings.twitch_client_secret, query, limit))
+
+
+@mcp.tool()
+async def read_twitch_chat(job_id: int, channel: str, seconds: int = 8, limit: int = 200) -> dict[str, Any]:
+    """Read a Twitch channel's LIVE chat via anonymous IRC — no credentials, no API key.
+
+    Live Twitch chat IS autonomously retrievable this way. Give a channel name (e.g. 'xqc');
+    Oyster listens for a few seconds and stores the chat messages as evidence. An empty
+    result means the channel was offline or chat was quiet during the window.
+    """
+    return await _tracked("twitch_chat", job_id, channel,
+                          read_twitch_chat_connector(store, job_id, channel, seconds, limit))
 
 
 @mcp.tool()
