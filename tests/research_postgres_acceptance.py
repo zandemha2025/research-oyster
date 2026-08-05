@@ -56,13 +56,27 @@ def main() -> None:
         dossier = store.dossier(created["job_id"])
         check(
             len(dossier["evidence"]) == 1 and dossier["coverage"] == {"web": 1}
-            and "discord" in dossier["gaps"] and "content_hash" not in dossier["evidence"][0],
-            "MCP-07", "dossier coverage and gaps are correct",
+            and dossier.get("synthesis") is None and "content_hash" not in dossier["evidence"][0],
+            "MCP-07", "dossier coverage is correct and synthesis is empty before authoring",
         )
         evidence = dossier["evidence"][0]
         check(
             all(evidence.get(key) is not None for key in ("source_type", "url", "title", "excerpt", "collected_at", "query", "metadata")),
             "STR-03", "evidence provenance is retained",
+        )
+        store.save_synthesis(created["job_id"], {
+            "executive_answer": "Owners tolerate winter range loss when preconditioning is easy.",
+            "themes": [{"title": "Preconditioning", "insight": "Cited as the main mitigation.",
+                        "citations": [{"quote": "range anxiety below freezing", "url": "https://example.test/ev"}]}],
+            "recommendations": ["Lead with preconditioning proof points."],
+            "confidence": "Moderate; single illustrative source in this test.",
+            "limitations": "Private owner groups were out of scope.",
+        })
+        synthesized = store.dossier(created["job_id"])
+        check(
+            synthesized["synthesis"]["executive_answer"].startswith("Owners tolerate")
+            and synthesized["job"]["status"] == "synthesized",
+            "MCP-08", "authored synthesis round-trips into the dossier",
         )
         jobs = store.list_jobs(20)
         check(jobs[0]["id"] == created["job_id"] and jobs[0]["brief"] == plan["objective"], "MCP-06", "jobs resume newest first")

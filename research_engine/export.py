@@ -1,10 +1,13 @@
-"""Write a research job's dossier and raw evidence to a folder under output/.
+"""Write a research job's authored report and raw evidence to a folder under output/.
 
-Produces five files per job so the work leaves chat and becomes shareable files:
-report.md and report.html (readable dossier), evidence.json and evidence.csv (the raw
-evidence rows), and raw_responses.jsonl (the redacted network payloads captured during
-collection). The gaps section is built from the same CONNECTOR_GUIDES the connectors use,
-so "how to unlock" advice never drifts from actual connector behavior.
+The deliverable is the report that ANSWERS the question — the model-authored synthesis
+(executive answer, themes with cited quotes, tensions, sentiment, recommendations,
+confidence & limits). Evidence is demoted to an appendix. Produces five files per job so
+the work leaves chat and becomes shareable files: report.md and report.html (the readable
+report), evidence.json and evidence.csv (the raw evidence rows), and raw_responses.jsonl
+(the redacted network payloads captured during collection).
+
+Export refuses to run without a synthesis: a data dump is not a report.
 """
 from __future__ import annotations
 
@@ -17,7 +20,6 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader
 
-from research_engine.connectors import CONNECTOR_GUIDES, SOURCE_TO_CONNECTOR
 from research_engine.store import ResearchStore
 from reporting.render import _to_html
 
@@ -53,19 +55,6 @@ def _group_findings(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"source_type": source, "entries": groups[source]} for source in order]
 
 
-def _gaps(dossier: dict[str, Any]) -> list[dict[str, Any]]:
-    gaps = []
-    for source in dossier.get("gaps", []):
-        guide = CONNECTOR_GUIDES.get(SOURCE_TO_CONNECTOR.get(source, source), {})
-        setup = guide.get("setup", "")
-        fallbacks = guide.get("fallbacks", [])
-        # Always-ready sources (rss, web) need no credentials, so they carry no setup or
-        # fallbacks. Surface their scope as guidance instead of leaving a bare heading.
-        note = "" if (setup or fallbacks) else (guide.get("scope") or "This source needs no setup — collect it directly.")
-        gaps.append({"source": source, "setup": setup, "fallbacks": fallbacks, "note": note})
-    return gaps
-
-
 def _csv_safe(value: Any) -> str:
     text = "" if value is None else str(value)
     if text[:1] in {"=", "+", "-", "@"}:  # spreadsheet formula-injection guard
@@ -90,6 +79,14 @@ def export_job(store: ResearchStore, job_id: int, output_dir: Path | str = Path(
     dossier = store.dossier(job_id)
     job = dossier["job"]
     evidence = dossier["evidence"]
+    synthesis = dossier.get("synthesis")
+    if not synthesis or not synthesis.get("executive_answer"):
+        # A report answers the question. Refuse to emit a bare data dump.
+        raise ValueError(
+            "This job has no synthesis yet, so there is nothing to report — only raw evidence. "
+            "Call write_research_synthesis(job_id, executive_answer, themes, ...) to author the "
+            "answer first, then export."
+        )
     raw_rows = store.list_raw_responses(job_id)
 
     base = Path(output_dir)
@@ -103,10 +100,10 @@ def export_job(store: ResearchStore, job_id: int, output_dir: Path | str = Path(
     markdown = env.get_template("research_dossier.md.j2").render(
         job=job,
         plan=job.get("plan", {}),
+        synthesis=synthesis,
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         findings=_group_findings(evidence),
         coverage=[{"source": source, "count": count} for source, count in dossier.get("coverage", {}).items()],
-        gaps=_gaps(dossier),
         evidence_count=len(evidence),
     )
 

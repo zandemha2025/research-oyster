@@ -40,6 +40,23 @@ class ResearchStore:
             conn.commit()
         return {"evidence_id": row["id"], "collected_at": row["collected_at"].isoformat()}
 
+    def save_synthesis(self, job_id: int, synthesis: dict[str, Any]) -> dict[str, Any]:
+        """Persist the model-authored report (executive answer, themes, tensions, etc.).
+
+        This is the deliverable. Stored on the job so export leads with the answer and the
+        evidence rows are demoted to an appendix. Also marks the job 'synthesized'.
+        """
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM research_jobs WHERE id=%s", (job_id,))
+            if not cur.fetchone():
+                raise ValueError(f"Research job {job_id} was not found.")
+            cur.execute(
+                "UPDATE research_jobs SET synthesis=%s, status='synthesized', updated_at=now() WHERE id=%s",
+                (json_value(synthesis), job_id),
+            )
+            conn.commit()
+        return {"job_id": job_id, "saved": True}
+
     def dossier(self, job_id: int) -> dict[str, Any]:
         with connect(self.database_url) as conn, conn.cursor() as cur:
             cur.execute("SELECT * FROM research_jobs WHERE id=%s", (job_id,))
@@ -52,11 +69,14 @@ class ResearchStore:
         counts: dict[str, int] = {}
         for item in items:
             counts[item["source_type"]] = counts.get(item["source_type"], 0) + 1
+        job_view = {key: (value.isoformat() if hasattr(value, "isoformat") else value) for key, value in job.items()}
+        # Coverage is informational for the model (where has it looked, how much), not a
+        # definition of "done" — a job is done when the synthesis answers the question.
         return {
-            "job": {key: (value.isoformat() if hasattr(value, "isoformat") else value) for key, value in job.items()},
+            "job": job_view,
             "evidence": items,
             "coverage": counts,
-            "gaps": [source for source in job["plan"]["recommended_sources"] if not counts.get(source)],
+            "synthesis": job_view.get("synthesis"),
         }
 
     def list_raw_responses(self, job_id: int) -> list[dict[str, Any]]:

@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     x_bearer_token: str = ""
     apify_token: str = ""
     discord_bot_token: str = ""
+    # Optional web-search provider keys. Any one makes discovery reliable; with none set,
+    # search_web falls back to a free, no-key DuckDuckGo HTML provider (best-effort).
+    tavily_api_key: str = ""
+    brave_api_key: str = ""
+    serper_api_key: str = ""
     collection_hour_utc: int = Field(default=16, ge=0, le=23)
     http_timeout_seconds: float = Field(default=20.0, gt=0)
     max_retries: int = Field(default=4, ge=0)

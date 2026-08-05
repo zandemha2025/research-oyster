@@ -1,6 +1,40 @@
-# Research dossier: {{ job.brief | cell }}
+# {{ job.brief | cell }}
 
-_Generated {{ generated_at }} · job #{{ job.id }} · {{ evidence_count }} evidence items across {{ coverage | length }} sources_
+_Generated {{ generated_at }} · job #{{ job.id }} · answer drawn from {{ evidence_count }} pieces of evidence across {{ coverage | length }} source types_
+
+## Executive answer
+{{ synthesis.executive_answer }}
+
+## Key themes
+{% if not synthesis.themes %}
+No distinct themes were recorded.
+{% endif %}{% for theme in synthesis.themes %}
+### {{ theme.title | cell }}
+{% if theme.insight %}{{ theme.insight }}
+{% endif %}{% for c in theme.citations %}{% if c.quote and c.url %}- "{{ c.quote | cell }}" — [{{ (c.source or c.url) | cell }}]({{ c.url }})
+{% elif c.quote %}- "{{ c.quote | cell }}"{% if c.source %} — {{ c.source | cell }}{% endif %}
+{% elif c.url %}- [{{ (c.source or c.url) | cell }}]({{ c.url }})
+{% endif %}{% endfor %}{% endfor %}
+{% if synthesis.tensions %}## Tensions and disagreement
+{{ synthesis.tensions }}
+{% endif %}
+{% if synthesis.sentiment %}## Sentiment
+{{ synthesis.sentiment }}
+{% endif %}
+## Recommendations
+{% if not synthesis.recommendations %}
+None recorded.
+{% endif %}{% for rec in synthesis.recommendations %}- {{ rec | cell }}
+{% endfor %}
+## Confidence and limitations
+{% if synthesis.confidence %}{{ synthesis.confidence }}
+{% endif %}{% if synthesis.limitations %}
+{{ synthesis.limitations }}
+{% endif %}
+
+---
+
+## Appendix A — job details
 
 | Field | Value |
 |---|---|
@@ -10,34 +44,16 @@ _Generated {{ generated_at }} · job #{{ job.id }} · {{ evidence_count }} evide
 | Status | {{ job.status | cell }} |
 | Created | {{ job.created_at | cell }} |
 
-## Research questions
-{% for question in plan.research_questions %}- {{ question | cell }}
-{% endfor %}
-## Recommended sources
-{% for source in plan.recommended_sources %}- {{ source | cell }}
-{% endfor %}
-## Query families
-{% for query in plan.query_families %}- {{ query | cell }}
-{% endfor %}
-## Findings by source
+## Appendix B — evidence by source
 {% if not findings %}
-No evidence was stored for this job yet.
+No evidence was stored for this job.
 {% endif %}{% for group in findings %}
 ### {{ group.source_type | cell }} ({{ group.entries | length }})
 {% for item in group.entries %}- {% if item.url %}[{{ item.title or item.url | cell }}]({{ item.url }}){% else %}{{ item.title | cell }}{% endif %}{% if item.author %} — {{ item.author | cell }}{% endif %}{% if item.published %} ({{ item.published | cell }}){% endif %}: {{ item.excerpt | cell }}
 {% endfor %}{% endfor %}
-## Source coverage
+## Appendix C — source coverage
 
 | Source | Items |
 |---|---|
 {% for row in coverage %}| {{ row.source | cell }} | {{ row.count }} |
 {% endfor %}
-## Gaps and how to unlock them
-{% if not gaps %}
-Every recommended source produced evidence. No gaps remain.
-{% endif %}{% for gap in gaps %}
-### {{ gap.source | cell }}
-{% if gap.setup %}- **Set up:** {{ gap.setup | cell }}
-{% endif %}{% for fallback in gap.fallbacks %}- **Fallback:** {{ fallback | cell }}
-{% endfor %}{% if gap.note %}- {{ gap.note | cell }}
-{% endif %}{% endfor %}

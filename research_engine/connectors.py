@@ -10,9 +10,14 @@ import httpx
 import re
 import ipaddress
 import socket
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs, unquote
 
 _TAG_RE = re.compile(r"<[^>]+>")
+
+# A stable, honest User-Agent. Reddit's public JSON and DuckDuckGo's HTML endpoint both
+# rate-limit anonymous clients; a descriptive UA is the difference between best-effort
+# working and being blocked outright.
+_UA = "ResearchOyster/0.2 (+https://github.com/zandemha2025/research-oyster)"
 
 
 def _plain_text(value: str) -> str:
@@ -31,35 +36,35 @@ from research_engine.store import ResearchStore
 CONNECTOR_GUIDES: dict[str, dict[str, Any]] = {
     "apify": {
         "enables": ["Reddit", "X scraping alternative", "web/community discovery", "arbitrary Actors"],
-        "setup": "Paste APIFY_TOKEN in Setup.",
+        "setup": "Paste APIFY_TOKEN in Setup (optional — Reddit and web work without it).",
         "fallbacks": [
-            "crawl_web_page on the relevant public pages",
-            "fetch_rss on topic or community feeds",
-            "get_browser_capture_mission for pages only the researcher can open",
+            "search_reddit / fetch_reddit_thread for Reddit discussion (free, no key)",
+            "discover_sources then crawl_web_page on the public pages it finds",
+            "search_web to locate coverage, then read the best results",
         ],
     },
     "x_official": {
         "setup": "Paste X_BEARER_TOKEN in Setup; X charges per API usage.",
         "fallbacks": [
-            "run_apify_actor with an X/Twitter scraper Actor",
-            "crawl_web_page on public posts or news coverage",
-            "get_browser_capture_mission for the researcher's own X session",
+            "search_web for the topic to find where it is discussed publicly",
+            "search_reddit — much of the same conversation happens on Reddit, for free",
+            "crawl_web_page on public posts, threads, or news coverage",
         ],
     },
     "twitch": {
         "setup": "Add a Twitch developer Client ID and Client Secret in Setup.",
         "fallbacks": [
-            "run_apify_actor with a Twitch channel or clips scraper Actor",
+            "search_web / search_reddit for what viewers say about the streams (live chat itself is not autonomously retrievable)",
             "crawl_web_page on public stats pages such as twitchtracker.com or sullygnome.com",
-            "get_browser_capture_mission for pages the researcher can open",
+            "get_browser_capture_mission only if the researcher needs live chat from a stream they are watching",
         ],
     },
     "kick": {
         "setup": "Add a Kick developer Client ID and Client Secret in Setup.",
         "fallbacks": [
+            "search_web / search_reddit for the surrounding discussion (free)",
             "crawl_web_page on public kick.com category and channel pages",
-            "run_apify_actor with a generic web scraper Actor",
-            "get_browser_capture_mission for pages the researcher can open",
+            "get_browser_capture_mission only for live chat the researcher is watching",
         ],
     },
     "discord_public": {
@@ -68,9 +73,9 @@ CONNECTOR_GUIDES: dict[str, dict[str, Any]] = {
     "discord_messages": {
         "setup": "Install your Discord bot in each server and grant View Channel, Read Message History, and the Message Content intent.",
         "fallbacks": [
+            "search_web / search_reddit — the same fans usually discuss the topic in public too",
             "inspect_discord_invite for public community size and activity metadata",
             "get_browser_capture_mission for supervised capture inside a server the researcher has already joined",
-            "run_apify_actor with a community-content Actor",
         ],
     },
     "rss": {
@@ -100,18 +105,6 @@ READY_CHECKS: dict[str, Any] = {
     "twitch": lambda s: bool(s.twitch_client_id and s.twitch_client_secret),
     "kick": lambda s: bool(s.kick_client_id and s.kick_client_secret),
     "discord_messages": lambda s: bool(s.discord_bot_token),
-}
-
-
-# Maps a dossier gap (a source_type in research_evidence) to the connector guide that unlocks it.
-SOURCE_TO_CONNECTOR: dict[str, str] = {
-    "x": "x_official",
-    "reddit": "apify",
-    "twitch": "twitch",
-    "kick": "kick",
-    "discord": "discord_messages",
-    "web": "self_hosted_web",
-    "rss": "rss",
 }
 
 
@@ -376,3 +369,320 @@ async def crawl_web_page(store: ResearchStore, job_id: int, url: str, query: str
     result = store.add_evidence(job_id, source_type="web", url=str(response.url), title=title, excerpt=excerpt,
                                 query=query, metadata={"status": response.status, "discovered_links": links, "raw_response_id": raw_id})
     return {**result, "url": str(response.url), "title": title, "text": excerpt, "discovered_links": links, "raw_response_id": raw_id}
+
+
+# ---------------------------------------------------------------------------
+# Discovery — the "where is this conversation happening?" primitives.
+#
+# search_web and discover_sources return *leads*, not stored evidence: the researcher
+# decides which to pursue (read a thread, crawl a page). Only when substance is collected
+# does it become add_evidence. Reddit search/thread fetch DO store, because they read the
+# actual comments where "what people are saying" lives.
+# ---------------------------------------------------------------------------
+
+async def _search_tavily(store: ResearchStore, job_id: int, key: str, query: str, limit: int) -> list[dict[str, Any]]:
+    async with httpx.AsyncClient(timeout=30, headers={"User-Agent": _UA}) as client:
+        response = await client.post(
+            "https://api.tavily.com/search",
+            json={"api_key": key, "query": query, "max_results": max(1, min(limit, 20)), "search_depth": "basic"},
+        )
+        record_raw(store.database_url, job_id, "research.search", "web_search", response)
+        response.raise_for_status()
+        payload = response.json()
+    return [
+        {"title": _plain_text(row.get("title", "")), "url": str(row.get("url", "")),
+         "snippet": _plain_text(row.get("content", ""))}
+        for row in payload.get("results", []) if row.get("url")
+    ]
+
+
+async def _search_brave(store: ResearchStore, job_id: int, key: str, query: str, limit: int) -> list[dict[str, Any]]:
+    async with httpx.AsyncClient(timeout=30, headers={"X-Subscription-Token": key, "Accept": "application/json", "User-Agent": _UA}) as client:
+        response = await client.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            params={"q": query, "count": max(1, min(limit, 20))},
+        )
+        record_raw(store.database_url, job_id, "research.search", "web_search", response)
+        response.raise_for_status()
+        payload = response.json()
+    return [
+        {"title": _plain_text(row.get("title", "")), "url": str(row.get("url", "")),
+         "snippet": _plain_text(row.get("description", ""))}
+        for row in payload.get("web", {}).get("results", []) if row.get("url")
+    ]
+
+
+async def _search_serper(store: ResearchStore, job_id: int, key: str, query: str, limit: int) -> list[dict[str, Any]]:
+    async with httpx.AsyncClient(timeout=30, headers={"X-API-KEY": key, "Content-Type": "application/json", "User-Agent": _UA}) as client:
+        response = await client.post("https://google.serper.dev/search", json={"q": query, "num": max(1, min(limit, 20))})
+        record_raw(store.database_url, job_id, "research.search", "web_search", response)
+        response.raise_for_status()
+        payload = response.json()
+    return [
+        {"title": _plain_text(row.get("title", "")), "url": str(row.get("link", "")),
+         "snippet": _plain_text(row.get("snippet", ""))}
+        for row in payload.get("organic", []) if row.get("link")
+    ]
+
+
+def _ddg_clean_url(href: str) -> str:
+    """DuckDuckGo HTML wraps results in /l/?uddg=<encoded>. Unwrap to the real URL."""
+    href = _html.unescape(href)
+    if href.startswith("//"):
+        href = "https:" + href
+    parsed = urlparse(href)
+    if "duckduckgo.com" in (parsed.hostname or "") and parsed.path.startswith("/l/"):
+        target = parse_qs(parsed.query).get("uddg", [""])[0]
+        if target:
+            return unquote(target)
+    return href
+
+
+_DDG_RESULT = re.compile(r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', re.DOTALL)
+_DDG_SNIPPET = re.compile(r'<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>', re.DOTALL)
+
+
+async def _search_duckduckgo(store: ResearchStore, job_id: int, query: str, limit: int) -> list[dict[str, Any]]:
+    """Free, no-key fallback. Best-effort: DuckDuckGo may rate-limit or change its HTML."""
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True, headers={"User-Agent": _UA}) as client:
+        response = await client.get("https://html.duckduckgo.com/html/", params={"q": query})
+        record_raw(store.database_url, job_id, "research.search", "web_search", response)
+        response.raise_for_status()
+        html_text = response.text
+    hits = _DDG_RESULT.findall(html_text)
+    snippets = [_plain_text(match) for match in _DDG_SNIPPET.findall(html_text)]
+    results = []
+    for index, (href, title_html) in enumerate(hits[: max(1, min(limit, 20))]):
+        url = _ddg_clean_url(href)
+        if not url.startswith(("http://", "https://")):
+            continue
+        results.append({
+            "title": _plain_text(title_html),
+            "url": url,
+            "snippet": snippets[index] if index < len(snippets) else "",
+        })
+    return results
+
+
+async def search_web(store: ResearchStore, job_id: int, query: str, limit: int = 10, *,
+                     tavily_key: str = "", brave_key: str = "", serper_key: str = "") -> dict[str, Any]:
+    """Search the open web and return ranked {title, url, snippet} leads (not stored as evidence).
+
+    A configured Tavily/Brave/Serper key makes results reliable; with no key, a free
+    DuckDuckGo HTML provider is used (best-effort, may be rate-limited). The researcher
+    decides which leads to actually read and turn into evidence.
+    """
+    if not query.strip():
+        raise ValueError("Provide a search query.")
+    if tavily_key:
+        provider, results = "tavily", await _search_tavily(store, job_id, tavily_key, query, limit)
+    elif brave_key:
+        provider, results = "brave", await _search_brave(store, job_id, brave_key, query, limit)
+    elif serper_key:
+        provider, results = "serper", await _search_serper(store, job_id, serper_key, query, limit)
+    else:
+        provider, results = "duckduckgo", await _search_duckduckgo(store, job_id, query, limit)
+    return {
+        "query": query,
+        "provider": provider,
+        "count": len(results),
+        "results": results,
+        "note": (
+            "These are leads, not evidence. Read the promising ones (crawl_web_page, "
+            "fetch_reddit_thread) and store what actually answers the question with add_evidence."
+            if results else
+            "No results. If provider is 'duckduckgo' it may be rate-limited — retry, rephrase, "
+            "or add a TAVILY_API_KEY/BRAVE_API_KEY/SERPER_API_KEY for reliable search."
+        ),
+    }
+
+
+_VENUE_RULES: list[tuple[str, str]] = [
+    ("reddit", r"(^|\.)reddit\.com$"),
+    ("youtube", r"(^|\.)(youtube\.com|youtu\.be)$"),
+    ("x", r"(^|\.)(x\.com|twitter\.com)$"),
+    ("discord", r"(^|\.)(discord\.gg|discord\.com|discordapp\.com)$"),
+    ("twitch", r"(^|\.)twitch\.tv$"),
+    ("kick", r"(^|\.)kick\.com$"),
+    ("tiktok", r"(^|\.)tiktok\.com$"),
+    ("facebook", r"(^|\.)(facebook\.com|instagram\.com)$"),
+]
+_FORUM_HINT = re.compile(r"forum|community|/board|viewtopic|/t/|/threads?/", re.IGNORECASE)
+
+
+def _classify_venue(url: str) -> str:
+    host = (urlparse(url).hostname or "").lower()
+    for venue, pattern in _VENUE_RULES:
+        if re.search(pattern, host):
+            return venue
+    if _FORUM_HINT.search(url):
+        return "forum"
+    return "news_or_web"
+
+
+async def discover_sources(store: ResearchStore, job_id: int, topic: str, *,
+                           tavily_key: str = "", brave_key: str = "", serper_key: str = "") -> dict[str, Any]:
+    """Find where a topic is actually discussed: run targeted searches and group hits by venue.
+
+    Answers "where is this conversation happening?" — returns leads grouped into reddit,
+    youtube, x, discord, twitch, kick, forum, and news_or_web so the researcher can go read
+    the real discussion. Nothing is stored; these are directions, not evidence.
+    """
+    if not topic.strip():
+        raise ValueError("Provide a topic to discover sources for.")
+    probes = [
+        topic,
+        f"{topic} reddit",
+        f"{topic} discussion OR forum OR community",
+        f"{topic} review OR opinion OR reaction",
+    ]
+    seen: set[str] = set()
+    venues: dict[str, list[dict[str, Any]]] = {}
+    for probe in probes:
+        found = await search_web(store, job_id, probe, limit=10,
+                                 tavily_key=tavily_key, brave_key=brave_key, serper_key=serper_key)
+        for lead in found["results"]:
+            url = lead["url"]
+            key = urlparse(url)._replace(query="", fragment="").geturl()
+            if key in seen:
+                continue
+            seen.add(key)
+            venues.setdefault(_classify_venue(url), []).append(lead)
+    ordered = ["reddit", "forum", "youtube", "x", "discord", "twitch", "kick", "tiktok", "facebook", "news_or_web"]
+    grouped = {venue: venues[venue] for venue in ordered if venue in venues}
+    return {
+        "topic": topic,
+        "total_leads": sum(len(items) for items in grouped.values()),
+        "venues": grouped,
+        "note": (
+            "Go where the conversation is. For reddit venues use search_reddit / "
+            "fetch_reddit_thread; for forums/news use crawl_web_page; note x/discord/twitch/kick "
+            "leads but remember live chat and private servers need the supervised browser route."
+        ),
+    }
+
+
+def _reddit_json_url(url: str) -> str:
+    parsed = urlparse(url.strip())
+    host = (parsed.hostname or "").lower()
+    if not (host == "reddit.com" or host.endswith(".reddit.com")):
+        raise ValueError("Provide a reddit.com thread URL.")
+    path = parsed.path.rstrip("/")
+    if path.endswith(".json"):
+        return f"https://www.reddit.com{path}"
+    return f"https://www.reddit.com{path}.json"
+
+
+def _reddit_blocked(status: int) -> ValueError:
+    return ValueError(
+        f"Reddit returned HTTP {status} (it rate-limits anonymous requests). "
+        "Retry shortly, or route around it with search_web / crawl_web_page."
+    )
+
+
+async def search_reddit(store: ResearchStore, job_id: int, query: str, limit: int = 25,
+                        subreddit: str = "") -> dict[str, Any]:
+    """Search Reddit's public JSON for posts about a topic and store them as evidence.
+
+    Free, no key. Optionally restrict to one subreddit. Stores each matching post as
+    source_type='reddit' evidence with author, score, and permalink provenance.
+    """
+    if not query.strip():
+        raise ValueError("Provide a Reddit search query.")
+    sub = subreddit.strip().lstrip("r/").strip("/")
+    base = f"https://www.reddit.com/r/{sub}/search.json" if sub else "https://www.reddit.com/search.json"
+    params = {"q": query, "limit": max(1, min(limit, 100)), "sort": "relevance", "type": "link",
+              "raw_json": 1, **({"restrict_sr": "true"} if sub else {})}
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True, headers={"User-Agent": _UA}) as client:
+        response = await client.get(base, params=params)
+        raw_id = record_raw(store.database_url, job_id, "research.reddit", "reddit_search", response)
+        if response.status_code in (403, 429):
+            raise _reddit_blocked(response.status_code)
+        response.raise_for_status()
+        payload = response.json()
+    stored = []
+    for child in payload.get("data", {}).get("children", []):
+        post = child.get("data", {})
+        permalink = post.get("permalink", "")
+        url = f"https://www.reddit.com{permalink}" if permalink else str(post.get("url", ""))
+        title = _plain_text(post.get("title", ""))
+        body = _plain_text(post.get("selftext", "")) or title
+        result = store.add_evidence(
+            job_id, source_type="reddit", url=url, title=title,
+            excerpt=body[:4000], author=post.get("author", ""),
+            published_at=datetime.fromtimestamp(post["created_utc"], tz=timezone.utc) if post.get("created_utc") else None,
+            query=query,
+            metadata={"subreddit": post.get("subreddit"), "score": post.get("score"),
+                      "num_comments": post.get("num_comments"), "permalink": permalink},
+        )
+        stored.append({**result, "url": url, "title": title, "subreddit": post.get("subreddit"),
+                       "score": post.get("score"), "num_comments": post.get("num_comments")})
+    return {"query": query, "subreddit": sub or None, "matched": len(stored), "items": stored, "raw_response_id": raw_id}
+
+
+def _walk_comments(node: Any, out: list[dict[str, Any]], limit: int) -> None:
+    """Depth-first collect message-bearing comment bodies from a Reddit listing tree."""
+    if len(out) >= limit:
+        return
+    if isinstance(node, dict):
+        if node.get("kind") == "t1":
+            data = node.get("data", {})
+            body = _plain_text(data.get("body", ""))
+            if body and body not in ("[deleted]", "[removed]"):
+                out.append({"author": data.get("author", ""), "score": data.get("score"),
+                            "body": body, "created_utc": data.get("created_utc")})
+        for value in node.values():
+            _walk_comments(value, out, limit)
+    elif isinstance(node, list):
+        for item in node:
+            _walk_comments(item, out, limit)
+
+
+async def fetch_reddit_thread(store: ResearchStore, job_id: int, url: str, max_comments: int = 40) -> dict[str, Any]:
+    """Fetch a Reddit thread's post + top comments (public JSON) and store them as evidence.
+
+    This is where "what people are actually saying" lives — the comment bodies, with their
+    authors and scores. Free, no key. Stores the post and each substantive comment as
+    source_type='reddit' evidence.
+    """
+    json_url = _reddit_json_url(url)
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True, headers={"User-Agent": _UA}) as client:
+        response = await client.get(json_url, params={"raw_json": 1, "limit": max(1, min(max_comments, 200))})
+        raw_id = record_raw(store.database_url, job_id, "research.reddit", "reddit_thread", response)
+        if response.status_code in (403, 429):
+            raise _reddit_blocked(response.status_code)
+        response.raise_for_status()
+        payload = response.json()
+    if not isinstance(payload, list) or len(payload) < 1:
+        raise ValueError("That URL did not return a Reddit thread.")
+    post = payload[0].get("data", {}).get("children", [{}])[0].get("data", {})
+    thread_url = f"https://www.reddit.com{post.get('permalink', '')}" if post.get("permalink") else json_url
+    subreddit = post.get("subreddit")
+    title = _plain_text(post.get("title", ""))
+    stored = []
+    if post:
+        body = _plain_text(post.get("selftext", "")) or title
+        result = store.add_evidence(
+            job_id, source_type="reddit", url=thread_url, title=title, excerpt=body[:4000],
+            author=post.get("author", ""),
+            published_at=datetime.fromtimestamp(post["created_utc"], tz=timezone.utc) if post.get("created_utc") else None,
+            metadata={"subreddit": subreddit, "score": post.get("score"),
+                      "num_comments": post.get("num_comments"), "kind": "post"},
+        )
+        stored.append({**result, "kind": "post", "title": title, "score": post.get("score")})
+    comments: list[dict[str, Any]] = []
+    if len(payload) > 1:
+        _walk_comments(payload[1], comments, max(1, min(max_comments, 200)))
+    for comment in comments:
+        excerpt = comment["body"][:4000]
+        result = store.add_evidence(
+            job_id, source_type="reddit", url=thread_url,
+            title=f"Comment by u/{comment['author']} in r/{subreddit}" if subreddit else f"Comment by u/{comment['author']}",
+            excerpt=excerpt, author=comment["author"],
+            published_at=datetime.fromtimestamp(comment["created_utc"], tz=timezone.utc) if comment.get("created_utc") else None,
+            metadata={"subreddit": subreddit, "score": comment.get("score"), "kind": "comment", "thread": title},
+        )
+        stored.append({**result, "kind": "comment", "author": comment["author"], "score": comment.get("score"),
+                       "excerpt": excerpt})
+    return {"url": thread_url, "title": title, "subreddit": subreddit, "post_stored": bool(post),
+            "comments_stored": len(comments), "items": stored, "raw_response_id": raw_id}

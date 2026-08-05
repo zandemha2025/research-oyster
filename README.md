@@ -1,6 +1,6 @@
 # Research Oyster
 
-Research Oyster is a local, source-agnostic research engine for Claude Code, Codex, and other MCP-compatible AI hosts. Give it an ordinary research brief; it turns the brief into questions and platform-specific searches, stores cited evidence in PostgreSQL, tracks coverage gaps, and returns a resumable dossier.
+Research Oyster is a local, source-agnostic research engine for Claude Code, Codex, and other MCP-compatible AI hosts. Give it an ordinary research brief; it finds where the topic is actually discussed, reads the real threads and comments, and returns a report that **answers the question** — an executive answer, themes backed by cited quotes, tensions, sentiment, recommendations, and an honest note on confidence. The raw evidence and network payloads are saved as an appendix, not handed back as the answer.
 
 The repository also includes Gaming Culture Pulse, a browser control center and reporting workflow built on the same collection foundation.
 
@@ -69,11 +69,11 @@ Type a normal request. You don't list feeds or platforms — Oyster plans that i
 
 ### 4. What Oyster does with that
 
-1. **Plans** the brief into research questions, entities, and per-source queries.
-2. **Checks connectors** and uses the ones that are ready. If a source needs credentials you haven't added, it does **not** stop — it falls back to the next best source (Apify, public web, RSS) and tells you how to unlock the rest later.
-3. **Collects and stores evidence** with full provenance: the URL, excerpt, author, timestamp, and the query that found it — deduplicated.
-4. **Returns a dossier**: findings grouped by source, a coverage count, and the gaps that remain.
-5. **Exports** a folder you can open and share.
+1. **Decomposes** the brief into the specific sub-questions and entities it needs to answer.
+2. **Discovers** where the conversation actually happens — subreddits, forums, threads, videos, articles — using free web search (no key required; a search key makes it more reliable).
+3. **Reads the real discussion**: Reddit posts and comments (free, no key), articles and forum threads, and any platform connectors whose credentials you've added. It stores what people actually said, with full provenance, deduplicated. If a source needs credentials you haven't added, it routes around it to where the topic is public — it does **not** hand you a setup to-do list as the answer.
+4. **Iterates** until it can answer confidently, then **writes the report** that answers your question.
+5. **Exports** a folder you can open and share, led by that report.
 
 ### 5. Get the results as files
 
@@ -97,7 +97,10 @@ For data on pages you're already signed into — a Discord server you're in, X, 
 
 | Source | What Oyster can do | What you need |
 |---|---|---|
-| Web | Crawl a supplied public page and save readable evidence | Nothing |
+| Web search | Find where a topic is discussed and return ranked leads to pursue | Nothing (free DuckDuckGo); an optional Tavily/Brave/Serper key makes it reliable |
+| Source discovery | Group leads into venues (Reddit, forums, YouTube, news, …) — "where is this conversation?" | Same as web search |
+| Reddit | Search public posts and read whole threads' comments where the discussion actually lives | Nothing |
+| Web page | Crawl a public page and save readable evidence | Nothing |
 | RSS/Atom | Match and store feed entries | Public feed URL |
 | X | Search recent public posts through the official API | X bearer token |
 | X fallback | Run a user-selected Apify Actor | Apify token and Actor access |
@@ -110,7 +113,7 @@ For data on pages you're already signed into — a Discord server you're in, X, 
 | Supervised browser capture | Review and approve visible excerpts into the active brief | Chrome/Edge extension and access to the page |
 | Approved-session browser traffic | Capture the network payloads a page you approve already receives, one domain at a time | Chrome/Edge extension, page access, and an explicit per-domain approval |
 
-Every research job can be exported to a folder under `output/` containing a readable report (Markdown and HTML), the raw evidence as `evidence.json` and `evidence.csv`, and the redacted network payloads collected during the run as `raw_responses.jsonl`. Ask the host to export, or use the **Research jobs** panel in the control center. When a connector is not configured, Oyster returns the next fallback to try rather than a dead error, so a research run finishes with the evidence it could gather plus clear instructions for unlocking the rest.
+Every research job can be exported to a folder under `output/`. The report (`report.md` / `report.html`) leads with the answer — an executive summary, themes with cited quotes, tensions, sentiment, recommendations, and a confidence note — and demotes the raw evidence to an appendix. The folder also contains the raw evidence as `evidence.json` and `evidence.csv` and the redacted network payloads collected during the run as `raw_responses.jsonl`. Ask the host to export, or use the **Research jobs** panel in the control center. When a connector is not configured, Oyster routes around it to where the topic is public (free web search and Reddit) rather than stopping — a run answers the question and states its confidence honestly, instead of returning a list of gaps to go fix.
 
 No credential is required unless the corresponding source is selected. API/provider charges are separate from Oyster.
 

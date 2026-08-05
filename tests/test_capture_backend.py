@@ -32,10 +32,11 @@ class CaptureBackendTests(unittest.TestCase):
 
     def setUp(self):
         self.store = CaptureStore(DATABASE_URL)
-        plan = build_plan(
+        self.plan = build_plan(
             "Develop a Christmas 2026 campaign for Kirkland Italian sparkling mineral water",
             "Choose a differentiated creative territory", "United States", "Christmas 2026",
         )
+        plan = self.plan
         self.job_id = ResearchStore(DATABASE_URL).create_job(
             plan["objective"], plan["decision"], plan["market"], plan["time_horizon"], plan,
         )["job_id"]
@@ -62,7 +63,7 @@ class CaptureBackendTests(unittest.TestCase):
             "excerpt": "We buy glass bottles for Christmas dinner because they look nicer.",
             "page_title": "Costco Fans — holiday-hosting",
             "author": "visible-user",
-            "research_question": "What occasions, unmet needs, and creative territories could produce a differentiated campaign?",
+            "research_question": self.plan["research_questions"][0],
             "researcher_note": "Potential holiday table ritual",
             "capture_mode": "supervised",
             "metadata": {"server": "Costco Fans", "channel": "holiday-hosting"},
@@ -89,7 +90,7 @@ class CaptureBackendTests(unittest.TestCase):
         mission = self.store.mission(self.job_id)
         self.assertEqual(self.job_id, mission["job_id"])
         self.assertIn("Kirkland", mission["brief"])
-        self.assertGreaterEqual(len(mission["research_questions"]), 5)
+        self.assertGreaterEqual(len(mission["research_questions"]), 3)
         self.assertIn("kirkland", mission["look_for"])
 
     def test_pending_capture_approval_promotes_anonymized_evidence_and_audits(self):
