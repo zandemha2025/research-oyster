@@ -144,9 +144,19 @@ def health() -> dict:
     checks.append({"name": "Press", "ok": db_ok, "detail": "No login needed" if db_ok else "Waiting for database"})
     weekly = latest_output("*-gaming-pulse.html")
     fresh = latest_output("*-fresh-signals.md")
+    browser_paired = False
+    if db_ok and settings:
+        try:
+            with connect(settings.database_url) as conn, conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM browser_clients WHERE revoked_at IS NULL LIMIT 1")
+                browser_paired = cur.fetchone() is not None
+        except Exception:
+            browser_paired = False
     return {
         "ready": db_ok,
         "checks": checks,
+        "extension_path": str(ROOT / "browser_extension"),
+        "browser_paired": browser_paired,
         "available_sources": [
             "discord",
             *(["twitch"] if settings and settings.twitch_client_id and settings.twitch_client_secret else []),
@@ -257,10 +267,19 @@ header{display:flex;justify-content:space-between;gap:24px;align-items:end;margi
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.panel{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px}.panel h2{font-size:19px;margin:0 0 16px}.check{display:flex;justify-content:space-between;border-top:1px solid #eee;padding:10px 0}.check:first-of-type{border:0}.ok{color:var(--green)}.bad{color:var(--red)}
 button,.button{font:inherit;font-weight:650;border:0;border-radius:10px;padding:11px 15px;background:#e8ece9;color:var(--ink);cursor:pointer;text-decoration:none;display:inline-block}button.dark{background:var(--accent);color:white}.links{display:flex;gap:10px;flex-wrap:wrap}.job{display:none;margin:18px 0;padding:18px;border-radius:14px;background:#fff9df;border:1px solid #eadb96}.job.show{display:block}.job.failed{background:#fff0ee;border-color:#e3aaa4}.job.success{background:#eaf6ed;border-color:#aad2b5}details{margin-top:12px;color:var(--muted)}pre{white-space:pre-wrap;font-size:12px;max-height:220px;overflow:auto}
 .pairing{margin-top:18px}.paircode{display:none;margin:12px 0;padding:14px;border:1px dashed #81948a;border-radius:10px;background:#f4faf6}.paircode.show{display:block}.paircode code{display:block;font-size:20px;font-weight:750;letter-spacing:1px;overflow-wrap:anywhere}.muted{color:var(--muted)}
+.onboard{margin:18px 0;padding:20px 22px;border-radius:16px;background:#eaf2ee;border:1px solid #bcd3c6}.onboard-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}.onboard-head strong{font-size:18px}.steps{margin:10px 0;padding-left:22px}.steps li{margin:7px 0}.check-item{display:flex;gap:8px;align-items:flex-start;margin:8px 0}.check-item .box{font-weight:750}code{background:#00000010;padding:2px 6px;border-radius:6px;overflow-wrap:anywhere}
 .modal{display:none;position:fixed;inset:0;background:#0008;padding:24px;overflow:auto}.modal.show{display:block}.dialog{max-width:700px;margin:4vh auto;background:white;border-radius:20px;padding:28px}.dialog h2{margin-top:0}.field{margin:15px 0}.field label{display:block;font-weight:650;margin-bottom:5px}.field small{color:var(--muted)}input{width:100%;font:inherit;padding:11px;border:1px solid #bfc5c1;border-radius:9px}.row{display:flex;gap:10px;justify-content:flex-end;margin-top:22px}
 @media(max-width:760px){header{display:block}header p{margin-top:15px}.actions,.grid{grid-template-columns:1fr}.action{min-height:120px}}
 </style></head><body><main class="wrap">
 <header><h1>Research Oyster</h1><p>Plan open-ended research, collect traceable evidence, and turn connected signals into a cited dossier.</p></header>
+<section id="onboarding" class="onboard" hidden><div class="onboard-head"><strong>Welcome — start here</strong><button onclick="dismissOnboarding()">Hide this</button></div>
+<p class="muted">Research Oyster is three parts working together:</p>
+<ol class="steps">
+<li><strong>Your AI host</strong> (Claude Code or Codex) — where you actually ask for research, in plain English. This is the main way you use Oyster.</li>
+<li><strong>This dashboard</strong> — your control room: system status, reports, one-click exports, and browser-capture setup. The installer opened it for you; reopen any time with <code>Open Gaming Pulse.command</code> or <code>python control_center.py</code>.</li>
+<li><strong>The browser extension</strong> (optional) — captures pages you're already logged into (Discord, X, Twitch chat) with your approval, no API keys. Set it up in the panel below.</li>
+</ol>
+<div id="onboardChecklist"></div></section>
 <section class="status"><div><strong id="headline">Checking your system...</strong><div id="subline">This takes a moment.</div></div><button onclick="openSetup()">Setup</button></section>
 <section id="job" class="job"><strong id="jobTitle"></strong><div id="jobMessage"></div><details><summary>Technical details</summary><pre id="jobDetails"></pre></details></section>
 <section class="actions">
@@ -272,7 +291,12 @@ button,.button{font:inherit;font-weight:650;border:0;border-radius:10px;padding:
 <div class="panel"><h2>Your reports</h2><p id="reportText">No reports found yet.</p><div class="links"><button id="weekly" onclick="openFile('weekly')" disabled>Open weekly report</button><button id="fresh" onclick="openFile('fresh')" disabled>Open fresh brief</button><button onclick="openFile('output')">Open output folder</button></div></div>
 <div class="panel"><h2>Research jobs</h2><p class="muted">Export any research job to a folder with a readable report, the raw evidence (JSON + CSV), and the captured network payloads.</p><div id="researchJobs"><p class="muted">Loading…</p></div></div>
 <div class="panel"><h2>Active capture sessions</h2><p class="muted">Approved browser traffic capture sessions. You can stop any session here; it also stops automatically when it expires.</p><div id="researchSessions"><p class="muted">None active.</p></div></div>
-<div class="panel pairing"><h2>Supervised browser capture</h2><p>Pair the Oyster extension to save approved excerpts from pages you can already access. Oyster never receives browser cookies or passwords.</p><button id="pairButton" onclick="createPairingCode()">Create one-time pairing code</button><div id="pairCode" class="paircode" aria-live="polite"><span class="muted">Local service</span><code id="captureAddress">http://127.0.0.1:8765</code><span class="muted">Pairing code — expires in 10 minutes</span><code id="captureCode"></code></div></div>
+<div class="panel pairing"><h2>Set up browser capture (optional)</h2><p class="muted">Only needed to capture pages you're logged into (Discord, X, Twitch chat) without API keys. Skip it if you only use web, RSS, and API sources.</p><div id="captureStatus" class="muted">Checking…</div>
+<ol class="steps">
+<li><strong>Load the extension in Chrome or Edge.</strong> Open <code>chrome://extensions</code>, turn on <em>Developer mode</em>, click <em>Load unpacked</em>, and choose this folder:<br><code id="extPath">…</code> <button id="copyExtPath" type="button">Copy path</button></li>
+<li><strong>Pair it.</strong> Click below, then paste the code into the extension's settings.<br><button id="pairButton" onclick="createPairingCode()">Create one-time pairing code</button><div id="pairCode" class="paircode" aria-live="polite"><span class="muted">Local service</span><code id="captureAddress">http://127.0.0.1:8765</code><span class="muted">Pairing code — expires in 10 minutes</span><code id="captureCode"></code></div></li>
+<li><strong>Capture.</strong> In the extension popup, pick a research job and click <em>Start capturing this site</em>. It records that site until you stop it or 30 minutes pass. Active sessions show up here.</li>
+</ol></div>
 <div class="panel"><h2>How capture feeds research</h2><p>Select an active brief in the extension. Oyster turns that brief into a capture mission, keeps candidates in review, and promotes only approved captures into the original dossier.</p><p class="muted">Best-effort name redaction is on by default; review every excerpt. Only capture material you are authorized to view and retain.</p></div></section>
 </main>
 <div id="modal" class="modal"><div class="dialog"><h2>Connections &amp; setup</h2><p>The database is required. Every research connector is optional: add Twitch, Kick, X, Apify, or an authorized Discord bot only when you need that source. Saved values stay in a private file on this computer.</p>
@@ -287,7 +311,7 @@ button,.button{font:inherit;font-weight:650;border:0;border-radius:10px;padding:
 <script>
 const token='__TOKEN__';let state={};
 async function api(path,body){const opt=body?{method:'POST',headers:{'Content-Type':'application/json','X-Pulse-Token':token},body:JSON.stringify(body)}:{};const r=await fetch(path,opt);const data=await r.json();if(!r.ok)throw new Error(data.error||'Request failed');return data}
-async function refresh(){state=await api('/api/status');document.getElementById('headline').textContent=state.ready?'Your system is ready':'Setup needs attention';document.getElementById('headline').className=state.ready?'ready':'notready';document.getElementById('subline').textContent=state.ready?'You can collect fresh signals or create reports.':'Open Setup to finish connecting the database.';document.getElementById('checks').innerHTML=state.checks.map(c=>`<div class="check"><span>${c.name}</span><span class="${c.ok?'ok':c.optional?'muted':'bad'}">${c.ok?'✓':c.optional?'—':'○'} ${c.detail}</span></div>`).join('');document.getElementById('weekly').disabled=!state.latest_weekly;document.getElementById('fresh').disabled=!state.latest_fresh;document.getElementById('reportText').textContent=state.latest_weekly?`Latest weekly report: ${state.latest_weekly}`:'No weekly report has been created yet.';loadResearchJobs();loadResearchSessions()}
+async function refresh(){state=await api('/api/status');document.getElementById('headline').textContent=state.ready?'Your system is ready':'Setup needs attention';document.getElementById('headline').className=state.ready?'ready':'notready';document.getElementById('subline').textContent=state.ready?'You can collect fresh signals or create reports.':'Open Setup to finish connecting the database.';document.getElementById('checks').innerHTML=state.checks.map(c=>`<div class="check"><span>${c.name}</span><span class="${c.ok?'ok':c.optional?'muted':'bad'}">${c.ok?'✓':c.optional?'—':'○'} ${c.detail}</span></div>`).join('');document.getElementById('weekly').disabled=!state.latest_weekly;document.getElementById('fresh').disabled=!state.latest_fresh;document.getElementById('reportText').textContent=state.latest_weekly?`Latest weekly report: ${state.latest_weekly}`:'No weekly report has been created yet.';if(state.extension_path)document.getElementById('extPath').textContent=state.extension_path;const cs=document.getElementById('captureStatus');if(cs)cs.innerHTML=state.browser_paired?'<span class="ok">✓ A browser is paired — you can capture from the extension.</span>':'<span class="muted">No browser paired yet — do steps 1–2 below.</span>';loadResearchJobs();loadResearchSessions();renderOnboarding()}
 async function run(action){if(!state.ready&&action!=='setup'){openSetup();return}showJob(action==='pulse'?'Collecting fresh signals':action==='collect'?'Collecting today’s data':'Creating weekly report','Working. Keep this window open.','running');try{const payload={action,week_start:state.week_start};if(action==='pulse')payload.sources=state.available_sources;const x=await api('/api/run',payload);poll(x.job_id)}catch(e){showJob('Could not start',e.message,'failed')}}
 async function poll(id){const x=await api('/api/job?id='+id);showJob(x.status==='running'?'Working...':x.status==='success'?'Done':'Needs attention',x.message,x.status,x.details);if(x.status==='running')setTimeout(()=>poll(id),1000);else refresh()}
 function showJob(title,msg,status,details=''){const e=document.getElementById('job');e.className='job show '+status;document.getElementById('jobTitle').textContent=title;document.getElementById('jobMessage').textContent=msg;document.getElementById('jobDetails').textContent=details||'No additional details.'}
@@ -300,6 +324,9 @@ async function openResearch(id){try{await api('/api/open',{kind:'research',job_i
 async function loadResearchSessions(){try{const s=await api('/api/research/sessions');const el=document.getElementById('researchSessions');const open=s.filter(x=>x.status==='approved'||x.status==='requested');if(!open.length){el.innerHTML='<p class="muted">None active.</p>';return}el.innerHTML=open.map(x=>`<div class="check"><span>${escapeHtml(x.domain)}<br><span class="muted">job ${escapeHtml(x.job_id)} · ${escapeHtml(x.status)}${x.expires_at?' · ends '+escapeHtml(String(x.expires_at).slice(11,16)):''}</span></span><span class="links"><button onclick="stopResearchSession(${x.id})">Stop</button></span></div>`).join('')}catch(e){document.getElementById('researchSessions').innerHTML=`<p class="bad">${e.message}</p>`}}
 async function stopResearchSession(id){try{await api('/api/research/sessions/'+id+'/stop',{});await loadResearchSessions()}catch(e){showJob('Could not stop session',e.message,'failed')}}
 function escapeHtml(v){const d=document.createElement('div');d.textContent=String(v==null?'':v);return d.innerHTML}
+function renderOnboarding(){const el=document.getElementById('onboarding');if(!el)return;if(localStorage.getItem('oyster_onboarded')==='1'){el.hidden=true;return}el.hidden=false;const done='<span class="box ok">✓</span>',todo='<span class="box muted">▢</span>';const items=[[state.ready,'Database connected'+(state.ready?'':' — open Setup to finish')],[null,'Attach to your AI host: the installer runs this; then restart Claude Code or Codex so it sees Oyster.'],[null,'Run your first research: in your AI host type — <code>Use Research Oyster to research what people are saying about the new Spider-Man movie, and export the report.</code>'],[state.browser_paired,'(Optional) Browser capture'+(state.browser_paired?' — paired':' — set it up in the panel below')]];document.getElementById('onboardChecklist').innerHTML=items.map(([ok,txt])=>`<div class="check-item">${ok===true?done:ok===false?todo:'<span class="box muted">•</span>'} <span>${txt}</span></div>`).join('')}
+function dismissOnboarding(){localStorage.setItem('oyster_onboarded','1');const el=document.getElementById('onboarding');if(el)el.hidden=true}
+document.addEventListener('click',e=>{if(e.target&&e.target.id==='copyExtPath'){const t=document.getElementById('extPath').textContent;navigator.clipboard&&navigator.clipboard.writeText(t);e.target.textContent='Copied';setTimeout(()=>e.target.textContent='Copy path',1500);}});
 async function createPairingCode(){if(!state.ready){openSetup();return}try{const x=await api('/api/capture/pairing-code',{});document.getElementById('captureCode').textContent=x.pairing_code;document.getElementById('pairCode').classList.add('show');document.getElementById('pairButton').textContent='Create a new code'}catch(e){showJob('Could not create pairing code',e.message,'failed')}}
 refresh();
 </script></body></html>'''
@@ -560,6 +587,14 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/capture/sessions/auto-approve":
                 store, client = self.capture_client()
                 self.send_json({"approved": store.auto_approve_for_client(client["client_id"])})
+            elif parsed.path == "/api/capture/sessions/start":
+                store, client = self.capture_client()
+                if payload.get("approved_by_user") is not True:
+                    raise ValueError("Explicit user approval is required to start capture.")
+                self.send_json(store.start_session(
+                    client["client_id"], int(payload.get("job_id", 0)), str(payload.get("domain", "")),
+                    str(payload.get("reason", "Started from the extension"))[:1000] or "Started from the extension",
+                ), 201)
             else:
                 self.send_json({"error": "Not found"}, 404)
         except PermissionError as exc:

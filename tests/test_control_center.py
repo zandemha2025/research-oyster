@@ -127,6 +127,25 @@ class ControlCenterTests(unittest.TestCase):
         self.assertIn("Research jobs", control_center.HTML)
         self.assertIn("loadResearchJobs", control_center.HTML)
 
+    def test_onboarding_and_capture_setup_are_in_the_ui(self):
+        # Fresh-user guidance: mental model, first-run checklist, and the guided capture setup.
+        self.assertIn("Welcome — start here", control_center.HTML)
+        self.assertIn("renderOnboarding", control_center.HTML)
+        self.assertIn("Set up browser capture", control_center.HTML)
+        self.assertIn("extPath", control_center.HTML)
+        self.assertIn("Load unpacked", control_center.HTML)
+
+    def test_status_exposes_extension_path_and_paired_flag(self):
+        from unittest import mock
+        settings = mock.Mock(database_url="postgresql:///x", twitch_client_id="", twitch_client_secret="",
+                             kick_client_id="", kick_client_secret="", apify_token="", x_bearer_token="", discord_bot_token="")
+        with mock.patch.object(control_center, "Settings", return_value=settings), \
+             mock.patch.object(control_center, "connect", side_effect=Exception("no db")):
+            health = control_center.health()
+        self.assertIn("extension_path", health)
+        self.assertTrue(health["extension_path"].endswith("browser_extension"))
+        self.assertIn("browser_paired", health)
+
     def test_active_sessions_panel_is_wired_in_the_ui(self):
         # F1 fix: the session list/stop endpoints must have a dashboard panel that calls them.
         self.assertIn("Active capture sessions", control_center.HTML)

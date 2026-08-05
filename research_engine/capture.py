@@ -561,6 +561,16 @@ class CaptureStore:
             conn.commit()
         return self._session_row(row)
 
+    def start_session(self, client_id: int, job_id: int, domain: str, reason: str = "Started from the extension") -> dict[str, Any]:
+        """Human-initiated capture: create and approve a session in one step.
+
+        This is the direct on-switch a person clicks in the extension — the click itself is
+        the approval — so no separate agent request is needed. Same bounds as any session:
+        single domain, 30-minute TTL, stoppable, audited.
+        """
+        session = self.request_session(job_id, domain, reason, requested_by="researcher")
+        return self.approve_session(session["id"], client_id)
+
     def list_sessions(self, client_id: int | None = None, job_id: int | None = None) -> list[dict[str, Any]]:
         self.expire_sessions()
         where = ["status IN ('requested','approved')"]
