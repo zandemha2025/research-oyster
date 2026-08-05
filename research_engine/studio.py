@@ -161,7 +161,25 @@ async def _run_agent(conv: Conversation, message: str) -> None:
         options = _agent_options(resume=conv.session_id)
         async with csdk.ClaudeSDKClient(options=options) as client:
             await client.query(message)
-            async for msg in client.receive_response():
+            responses = client.receive_response()
+            while True:
+                try:
+                    # Inactivity watchdog: if the agent produces nothing for 3 minutes it has
+                    # stalled (a wedged tool, a hung generation). Stop the turn so the UI never
+                    # gets stranded on a spinner with no way out.
+                    msg = await asyncio.wait_for(responses.__anext__(), timeout=180)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    _emit(conv, {"type": "error", "message": (
+                        "The agent went quiet for 3 minutes and was stopped — it likely stalled "
+                        "on a slow source or a long write-up. Your evidence is saved; ask it to "
+                        "'write the synthesis and export the report' to finish, or try again.")})
+                    try:
+                        await client.interrupt()
+                    except Exception:
+                        pass
+                    break
                 if isinstance(msg, csdk.StreamEvent):
                     # When available, text and thinking stream as deltas here (nicest UX).
                     raw = getattr(msg, "event", None) or {}
