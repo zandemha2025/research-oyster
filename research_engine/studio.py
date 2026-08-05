@@ -143,15 +143,15 @@ async def _run_agent(conv: Conversation, message: str) -> None:
     """
     conv.busy = True
     tool_names: dict[str, str] = {}  # tool_use_id -> tool name, to interpret results
+    produced = False       # did this turn emit ANY output (text / thinking / tool)?
+    streamed_text = False  # did text arrive as StreamEvent deltas for the current message?
     try:
         options = _agent_options(resume=conv.session_id)
         async with csdk.ClaudeSDKClient(options=options) as client:
             await client.query(message)
             async for msg in client.receive_response():
                 if isinstance(msg, csdk.StreamEvent):
-                    # Live token streaming: text and thinking arrive as deltas here (the
-                    # ThinkingBlock on AssistantMessage comes back empty, so this is the
-                    # only place the reasoning is actually available).
+                    # When available, text and thinking stream as deltas here (nicest UX).
                     raw = getattr(msg, "event", None) or {}
                     etype = raw.get("type")
                     if etype == "content_block_start" and raw.get("content_block", {}).get("type") == "thinking":
@@ -159,16 +159,23 @@ async def _run_agent(conv: Conversation, message: str) -> None:
                     elif etype == "content_block_delta":
                         delta = raw.get("delta", {})
                         if delta.get("type") == "text_delta" and delta.get("text"):
+                            produced = True
+                            streamed_text = True
                             _emit(conv, {"type": "text", "text": delta["text"]})
                         elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                            produced = True
                             _emit(conv, {"type": "thinking", "text": delta["thinking"]})
                 elif isinstance(msg, csdk.AssistantMessage):
-                    # Text/thinking already streamed via StreamEvent deltas above; here we
-                    # only take the complete tool-use blocks (full input) and the session id.
                     if getattr(msg, "session_id", None):
                         conv.session_id = msg.session_id
                     for block in msg.content:
-                        if isinstance(block, csdk.ToolUseBlock):
+                        if isinstance(block, csdk.TextBlock) and block.text.strip() and not streamed_text:
+                            # Fallback: some SDK/CLI versions don't stream text deltas, so take
+                            # the complete text block. Guarded by streamed_text to avoid doubling.
+                            produced = True
+                            _emit(conv, {"type": "text", "text": block.text})
+                        elif isinstance(block, csdk.ToolUseBlock):
+                            produced = True
                             tool_names[block.id] = block.name
                             _emit(conv, {
                                 "type": "tool_call",
@@ -176,10 +183,12 @@ async def _run_agent(conv: Conversation, message: str) -> None:
                                 "raw_name": block.name,
                                 "input": block.input,
                             })
+                    streamed_text = False  # reset for the next assistant message in this turn
                 elif isinstance(msg, csdk.UserMessage):
                     content = msg.content if isinstance(msg.content, list) else []
                     for block in content:
                         if isinstance(block, csdk.ToolResultBlock):
+                            produced = True
                             name = tool_names.get(block.tool_use_id, "")
                             text = _stringify_tool_result(block.content)
                             _emit(conv, {
@@ -192,9 +201,22 @@ async def _run_agent(conv: Conversation, message: str) -> None:
                 elif isinstance(msg, csdk.ResultMessage):
                     if getattr(msg, "session_id", None):
                         conv.session_id = msg.session_id
+                    is_err = bool(getattr(msg, "is_error", False))
+                    # A turn that ends with an error, or produces nothing at all, almost always
+                    # means this machine isn't signed in to Claude (the CLI returned $0/no output).
+                    # Surface it instead of showing a blank "turn complete".
+                    if is_err or not produced:
+                        detail = str(getattr(msg, "result", "") or getattr(msg, "subtype", "")
+                                     or getattr(msg, "api_error_status", "") or "the model returned no output").strip()
+                        _emit(conv, {"type": "error", "message": (
+                            f"The agent finished without an answer ({detail}). "
+                            "The usual cause is that this Mac isn't signed in to Claude: open Terminal and run "
+                            "`claude setup-token`, then restart the Studio. (Or check the terminal running "
+                            "./studio for the exact error.)"
+                        )})
                     _emit(conv, {
                         "type": "result",
-                        "is_error": bool(getattr(msg, "is_error", False)),
+                        "is_error": is_err,
                         "cost_usd": getattr(msg, "total_cost_usd", None),
                     })
     except Exception as exc:  # never leave the UI hanging
