@@ -41,6 +41,58 @@ The database is required. Every external connector is optional. The installer cr
 
 For the complete beginner walkthrough, credential instructions, manual Linux setup, verification, and troubleshooting, read [docs/SETUP.md](docs/SETUP.md).
 
+## Using Research Oyster: step by step
+
+### 1. Install it (once)
+
+Run the one-line installer above. It sets up the database and attaches Oyster to Claude Code / Codex.
+
+### 2. Restart your AI host
+
+Quit and reopen Claude Code (or Codex) so it picks up the new tool. There is nothing else to "launch" — you talk to Oyster through your AI host in plain English.
+
+### 3. Ask for research in plain English
+
+Type a normal request. You don't list feeds or platforms — Oyster plans that itself. Concrete examples:
+
+**Social sentiment across platforms**
+> Use Research Oyster to research what people on Discord, Kick, and Twitch are saying about the new Spider-Man movie. Check which sources are ready first, use the ones that are, and export the report when you're done.
+
+**Brand / campaign research**
+> Use Research Oyster to study Kirkland Italian sparkling mineral water for a US Christmas 2026 campaign. Find consumer tensions, competitor activity, and three creative territories. Cite every claim and tell me what you couldn't cover.
+
+**Market / competitive map**
+> Use Research Oyster to map how US college students discuss affordable gaming laptops across Reddit, X, and tech press over the last six months. Give me a cited opportunity map and clearly flag unavailable sources.
+
+**Resume earlier work**
+> Use Research Oyster to list my recent research jobs, resume the Spider-Man one, fill the biggest gaps, and re-export the report.
+
+### 4. What Oyster does with that
+
+1. **Plans** the brief into research questions, entities, and per-source queries.
+2. **Checks connectors** and uses the ones that are ready. If a source needs credentials you haven't added, it does **not** stop — it falls back to the next best source (Apify, public web, RSS) and tells you how to unlock the rest later.
+3. **Collects and stores evidence** with full provenance: the URL, excerpt, author, timestamp, and the query that found it — deduplicated.
+4. **Returns a dossier**: findings grouped by source, a coverage count, and the gaps that remain.
+5. **Exports** a folder you can open and share.
+
+### 5. Get the results as files
+
+Ask the host to export (or click **Export report** in the dashboard). Each job produces a folder under `output/`:
+
+- `report.md` and `report.html` — a readable, cited report
+- `evidence.json` and `evidence.csv` — the raw evidence (CSV opens in any spreadsheet)
+- `raw_responses.jsonl` — the redacted network payloads collected during the run
+
+### 6. The dashboard (optional)
+
+Reopen it any time with `Open Gaming Pulse.command` (macOS) or `python control_center.py`. It shows readiness, your research jobs with one-click **Export report** / **Open folder**, active capture sessions, and report shortcuts.
+
+![Research Oyster control center](docs/images/control-center.png)
+
+### 7. Sources behind a login, without API keys (optional)
+
+For data on pages you're already signed into — a Discord server you're in, X, etc. — the **Research Oyster Capture** browser extension captures what those pages load, with your approval. Load it once (Chrome/Edge → Extensions → Developer mode → Load unpacked → `browser_extension`), pair it with a one-time code from the dashboard, and either approve each capture or trust a domain once so it captures hands-free while you browse. See [docs/USAGE.md](docs/USAGE.md) and [browser_extension/README.md](browser_extension/README.md).
+
 ## Source support
 
 | Source | What Oyster can do | What you need |
@@ -62,15 +114,7 @@ Every research job can be exported to a folder under `output/` containing a read
 
 No credential is required unless the corresponding source is selected. API/provider charges are separate from Oyster.
 
-## How to use it
-
-In your MCP-compatible AI host:
-
-> Use Research Oyster to compare how US college students discuss affordable gaming laptops across Reddit, X, Twitch, and technology press. Focus on purchase barriers from the last six months. Give me a cited opportunity map and clearly identify unavailable sources.
-
-The host should create a job, inspect connector readiness, gather and store evidence, inspect the final dossier, and synthesize with direct citations. Jobs persist locally and can be resumed later.
-
-See [docs/USAGE.md](docs/USAGE.md) for prompt templates, individual MCP tools, the browser workflow, and command-line examples.
+See [docs/USAGE.md](docs/USAGE.md) for prompt templates, the individual MCP tools, the browser workflow, and command-line examples.
 
 ## Manual quick start
 
@@ -110,7 +154,7 @@ Run the browser control center with:
 .venv/bin/python tests/research_postgres_acceptance.py
 ```
 
-The release was validated against 93 user stories. The local audit found and fixed nine logistical, security, data-quality, and UX defects, then passed all 93 post-fix behaviors.
+The release was validated against a catalog of 99 user stories ([docs/FEATURE_STATUS.xlsx](docs/FEATURE_STATUS.xlsx)). The audit found and fixed several logistical, data-quality, and UX defects, then re-tested every behavior; continuous integration runs the full suite on every change.
 
 ## Important boundaries
 
