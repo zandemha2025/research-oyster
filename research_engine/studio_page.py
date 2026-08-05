@@ -49,12 +49,31 @@ PAGE = r'''<!doctype html>
 .empty{color:var(--muted);padding:40px 16px;text-align:center;font-size:13px}
 .pill{font-size:11px;border-radius:20px;padding:2px 9px;background:var(--wash);color:var(--muted)}
 .pill.ok{background:#e7f3ec;color:var(--green)}
+.sechead{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin:20px 0 8px}
+.report-item{padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;border:1px solid transparent}
+.report-item:hover{background:#e2e9e5}.report-item small{display:block;color:var(--muted)}
+.docview{display:none;position:fixed;inset:0;z-index:50;background:#fff;flex-direction:column}
+.docview.show{display:flex}
+.docbar{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--wash)}
+.docbar b{font:700 15px Georgia,serif}.docbar button{font:inherit;font-weight:650;border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 12px;cursor:pointer}
+.docview iframe{flex:1;border:0;width:100%}
+.graph{padding:16px 14px;display:none}
+.gnode{display:flex;align-items:center;gap:8px;padding:8px 11px;border:1px solid var(--line);border-radius:9px;margin:0 0 4px;font-size:13px;background:#fff}
+.gnode .dot{width:9px;height:9px;border-radius:50%;background:#c7ccc8;flex:none}
+.gnode.running{border-color:#e0b400;background:#fdfaef}.gnode.running .dot{background:#e0b400}
+.gnode.done{border-color:#aad2b5;background:#eef7f0}.gnode.done .dot{background:var(--green)}
+.gnode.failed{border-color:#e3aaa4;background:#fdecea}.gnode.failed .dot{background:var(--red)}
+.gnode.skipped{opacity:.45}
+.gnode .gdetail{color:var(--muted);font-size:11px;margin-left:auto;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gnode.gsub{margin-left:20px}
 </style></head><body>
 <div class="app">
   <div class="col side">
     <h1>Studio</h1><div class="sub" id="authpill">Research Oyster</div>
     <button class="newbtn" onclick="newConversation()">+ New research</button>
     <div id="convos"></div>
+    <div class="sechead">Reports</div>
+    <div id="reportsList"><div class="empty" style="padding:6px 0;text-align:left">No reports yet.</div></div>
   </div>
 
   <div class="col chat">
@@ -67,15 +86,17 @@ PAGE = r'''<!doctype html>
 
   <div class="col activity">
     <div class="actitle"><span>Live activity</span>
-      <div class="tabs"><button class="tab active" id="tabFeed" onclick="showTab('feed')">Activity</button><button class="tab" id="tabReport" onclick="showTab('report')">Report</button></div>
+      <div class="tabs"><button class="tab active" id="tabFeed" onclick="showTab('feed')">Activity</button><button class="tab" id="tabGraph" onclick="showTab('graph')">Graph</button><button class="tab" id="tabReport" onclick="showTab('report')">Report</button></div>
     </div>
     <div class="feed" id="feed"><div class="empty">Tool calls and raw results will appear here as the agent works.</div></div>
+    <div class="graph" id="graphView"><div class="empty">The research pipeline appears here as a graph when a run starts.</div></div>
     <div class="reportwrap" id="reportPane" style="display:none">
       <select id="reportSelect" onchange="loadReport(this.value)"><option value="">No report yet</option></select>
       <iframe id="reportFrame"></iframe>
     </div>
   </div>
 </div>
+<div class="docview" id="docView"><div class="docbar"><button onclick="closeDoc()">← Back</button><b id="docTitle">Report</b></div><iframe id="docFrame"></iframe></div>
 <script>
 const token='__TOKEN__';
 let active=null, es=null, curAssistant=null, curThinking=null;
@@ -85,7 +106,10 @@ async function api(path,body){const opt=body?{method:'POST',headers:{'Content-Ty
 function el(t,c,txt){const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e}
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
 
-async function boot(){try{const h=await api('/api/health');document.getElementById('authpill').innerHTML=`auth: <span class="pill ${h.auth==='ambient'?'ok':'ok'}">${h.auth}</span> · db: <span class="pill ${h.db?'ok':''}">${h.db?'ok':'down'}</span>`}catch(e){}await refreshConvos()}
+async function boot(){try{const h=await api('/api/health');document.getElementById('authpill').innerHTML=`auth: <span class="pill ${h.auth==='ambient'?'ok':'ok'}">${h.auth}</span> · db: <span class="pill ${h.db?'ok':''}">${h.db?'ok':'down'}</span>`}catch(e){}await refreshConvos();loadReports()}
+async function loadReports(){try{const jobs=await api('/api/jobs');const box=document.getElementById('reportsList');const done=(jobs||[]).filter(j=>j.status==='synthesized');if(!done.length){box.innerHTML='<div class="empty" style="padding:6px 0;text-align:left">No reports yet.</div>';return}box.innerHTML='';done.forEach(j=>{const d=el('div','report-item');d.innerHTML=`${esc((j.brief||'Untitled').slice(0,44))}<small>#${j.id} · ${(j.created_at||'').slice(0,10)}</small>`;d.onclick=()=>openReportDoc(j.id,j.brief);box.appendChild(d)})}catch(e){}}
+function openReportDoc(id,title){document.getElementById('docTitle').textContent=title?String(title).slice(0,90):'Report — job #'+id;document.getElementById('docFrame').src='/api/report/'+id+'?_='+Date.now();document.getElementById('docView').classList.add('show')}
+function closeDoc(){document.getElementById('docView').classList.remove('show');document.getElementById('docFrame').src='about:blank'}
 async function refreshConvos(){const list=await api('/api/conversations');const box=document.getElementById('convos');box.innerHTML='';for(const c of list){convs[c.id]=convs[c.id]||c;const d=el('div','convo'+(c.id===active?' active':''));d.innerHTML=`${esc(c.title)}<small>${c.job_ids.length?c.job_ids.length+' report(s)':'no report yet'}</small>`;d.onclick=()=>openConversation(c.id);box.appendChild(d)}}
 
 async function newConversation(){const d=await api('/api/conversations',{title:'New research'});convs[d.conversation_id]={id:d.conversation_id,title:d.title,job_ids:[]};await refreshConvos();openConversation(d.conversation_id)}
@@ -99,9 +123,15 @@ function openConversation(cid){active=cid;curAssistant=null;
   refreshConvos();
   if(es)es.close();
   es=new EventSource('/api/chat/stream?conversation_id='+cid);
-  const handlers=['user','text','thinking','thinking_start','tool_call','tool_result','job_linked','result','done','error','ping'];
+  document.getElementById('graphView').innerHTML='<div class="empty">The research pipeline appears here as a graph when a run starts.</div>';
+  showTab('feed');
+  const handlers=['user','text','thinking','thinking_start','tool_call','tool_result','job_linked','result','done','error','ping','graph_init','node','note'];
   handlers.forEach(t=>es.addEventListener(t,ev=>onEvent(t,JSON.parse(ev.data))));
 }
+
+function initGraph(nodes){const g=document.getElementById('graphView');g.innerHTML='';(nodes||[]).forEach(id=>{const sub=id.indexOf('collect:')===0;const box=el('div','gnode'+(sub?' gsub':''));box.id='gn-'+id;box.innerHTML='<span class="dot"></span><span class="glabel">'+esc(id.replace('collect:','collect · '))+'</span><span class="gdetail"></span>';g.appendChild(box)})}
+function setNode(id,state,detail){const box=document.getElementById('gn-'+id);if(!box)return;box.className='gnode'+(id.indexOf('collect:')===0?' gsub':'')+' '+(state||'');if(detail)box.querySelector('.gdetail').textContent=detail}
+function addNote(text){const f=feedBox();if(f.querySelector('.empty'))f.innerHTML='';const n=el('div','muted',text);n.style.cssText='font-size:12px;margin:8px 2px';f.appendChild(n);f.scrollTop=f.scrollHeight}
 
 function streamBox(){return document.getElementById('stream')}
 function scrollStream(){const s=streamBox();s.scrollTop=s.scrollHeight}
@@ -109,6 +139,9 @@ function feedBox(){return document.getElementById('feed')}
 
 function onEvent(type,data){
   if(type==='ping')return;
+  if(type==='graph_init'){initGraph(data.nodes);showTab('graph');return}
+  if(type==='node'){setNode(data.id,data.state,data.detail);return}
+  if(type==='note'){addNote(data.text);return}
   if(type==='user'){curAssistant=null;curThinking=null;const m=el('div','msg user',data.text);streamBox().appendChild(m);scrollStream();return}
   if(type==='text'){curThinking=null;if(!curAssistant){curAssistant=el('div','msg assistant');curAssistant.innerHTML='<b class="who">Oyster</b>';const span=el('span','body-text');curAssistant.appendChild(span);streamBox().appendChild(curAssistant)}curAssistant.querySelector('.body-text').textContent+=data.text;scrollStream();return}
   if(type==='thinking_start'){curAssistant=null;curThinking=el('div','think');curThinking.innerHTML='<span class="lbl">thinking</span>';const s=el('span','tbody');curThinking.appendChild(s);streamBox().appendChild(curThinking);scrollStream();return}
@@ -118,7 +151,7 @@ function onEvent(type,data){
   if(type==='job_linked'){const c=convs[active];if(c&&!c.job_ids.includes(data.job_id)){c.job_ids.push(data.job_id);rebuildReportSelect(data.job_id)}refreshConvos();return}
   if(type==='result'){curAssistant=null;if(data.cost_usd!=null){const f=el('div','msg muted','— turn complete · $'+Number(data.cost_usd).toFixed(4));streamBox().appendChild(f)}return}
   if(type==='error'){curAssistant=null;const m=el('div','msg err');m.innerHTML='<b class="who">error</b>'+esc(data.message);streamBox().appendChild(m);scrollStream();return}
-  if(type==='done'){document.getElementById('input').disabled=false;document.getElementById('sendbtn').disabled=false;const c=convs[active];if(c&&c.job_ids&&c.job_ids.length)rebuildReportSelect(c.job_ids[c.job_ids.length-1]);return}
+  if(type==='done'){document.getElementById('input').disabled=false;document.getElementById('sendbtn').disabled=false;const c=convs[active];if(c&&c.job_ids&&c.job_ids.length)rebuildReportSelect(c.job_ids[c.job_ids.length-1]);loadReports();refreshConvos();return}
 }
 
 function addEvt(cls,ico,name,body){const f=feedBox();if(f.querySelector('.empty'))f.innerHTML='';
@@ -136,7 +169,7 @@ function rebuildReportSelect(select){const c=convs[active];const sel=document.ge
 }
 function loadReport(j){if(j)document.getElementById('reportFrame').src='/api/report/'+j+'?_='+Date.now()}
 
-function showTab(which){document.getElementById('tabFeed').classList.toggle('active',which==='feed');document.getElementById('tabReport').classList.toggle('active',which==='report');document.getElementById('feed').style.display=which==='feed'?'block':'none';document.getElementById('reportPane').style.display=which==='report'?'flex':'none'}
+function showTab(which){document.getElementById('tabFeed').classList.toggle('active',which==='feed');document.getElementById('tabGraph').classList.toggle('active',which==='graph');document.getElementById('tabReport').classList.toggle('active',which==='report');document.getElementById('feed').style.display=which==='feed'?'block':'none';document.getElementById('graphView').style.display=which==='graph'?'block':'none';document.getElementById('reportPane').style.display=which==='report'?'flex':'none'}
 
 async function send(){const inp=document.getElementById('input');const msg=inp.value.trim();if(!msg||!active)return;inp.value='';inp.disabled=true;document.getElementById('sendbtn').disabled=true;try{await api('/api/chat/send',{conversation_id:active,message:msg})}catch(e){onEvent('error',{message:e.message});inp.disabled=false;document.getElementById('sendbtn').disabled=false}}
 

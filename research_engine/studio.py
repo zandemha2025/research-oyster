@@ -101,10 +101,10 @@ async def _allow_research_tools(tool_name: str, tool_input: dict[str, Any], cont
     )
 
 
-def _agent_options(resume: str | None) -> csdk.ClaudeAgentOptions:
+def _agent_options(resume: str | None, system_prompt: str = SYSTEM_PROMPT) -> csdk.ClaudeAgentOptions:
     return csdk.ClaudeAgentOptions(
         cwd=str(ROOT),
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         mcp_servers={
             "research-oyster": {
                 "type": "stdio",
@@ -146,114 +146,150 @@ def _emit(conv: Conversation, event: dict[str, Any]) -> None:
     conv.queue.put_nowait(event)
 
 
-async def _run_agent(conv: Conversation, message: str) -> None:
-    """Drive one user turn and stream every event into the conversation queue.
+async def _drive(client: "csdk.ClaudeSDKClient", emit, timeout: int = 180) -> dict[str, Any]:
+    """Consume one agent response, emitting text/thinking/tool events via `emit`.
 
-    Uses the persistent ClaudeSDKClient (not the one-shot query() helper): the
-    can_use_tool callback runs over a control channel that stays open only while the
-    client connection is alive, so a fresh client is held open for the whole turn.
+    Shared by both the conversational path and every graph node. Returns a summary:
+    {produced, is_error, session_id, text, job_id, cost_usd}. A per-message inactivity
+    timeout means a stalled step fails on its own instead of hanging forever.
     """
+    tool_names: dict[str, str] = {}
+    res: dict[str, Any] = {"produced": False, "is_error": False, "session_id": None,
+                           "text": "", "job_id": None, "cost_usd": None}
+    streamed_text = False
+    responses = client.receive_response()
+    while True:
+        try:
+            msg = await asyncio.wait_for(responses.__anext__(), timeout=timeout)
+        except StopAsyncIteration:
+            break
+        except asyncio.TimeoutError:
+            res["is_error"] = True
+            try:
+                await client.interrupt()
+            except Exception:
+                pass
+            break
+        if isinstance(msg, csdk.StreamEvent):
+            raw = getattr(msg, "event", None) or {}
+            etype = raw.get("type")
+            if etype == "content_block_start" and raw.get("content_block", {}).get("type") == "thinking":
+                emit({"type": "thinking_start"})
+            elif etype == "content_block_delta":
+                delta = raw.get("delta", {})
+                if delta.get("type") == "text_delta" and delta.get("text"):
+                    res["produced"] = True
+                    streamed_text = True
+                    res["text"] += delta["text"]
+                    emit({"type": "text", "text": delta["text"]})
+                elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                    res["produced"] = True
+                    emit({"type": "thinking", "text": delta["thinking"]})
+        elif isinstance(msg, csdk.AssistantMessage):
+            if getattr(msg, "session_id", None):
+                res["session_id"] = msg.session_id
+            for block in msg.content:
+                if isinstance(block, csdk.TextBlock) and block.text.strip() and not streamed_text:
+                    res["produced"] = True
+                    res["text"] += block.text
+                    emit({"type": "text", "text": block.text})
+                elif isinstance(block, csdk.ToolUseBlock):
+                    res["produced"] = True
+                    tool_names[block.id] = block.name
+                    emit({"type": "tool_call", "name": block.name.replace("mcp__research-oyster__", ""),
+                          "raw_name": block.name, "input": block.input})
+            streamed_text = False
+        elif isinstance(msg, csdk.UserMessage):
+            content = msg.content if isinstance(msg.content, list) else []
+            for block in content:
+                if isinstance(block, csdk.ToolResultBlock):
+                    res["produced"] = True
+                    name = tool_names.get(block.tool_use_id, "")
+                    text = _stringify_tool_result(block.content)
+                    emit({"type": "tool_result", "name": name.replace("mcp__research-oyster__", ""),
+                          "is_error": bool(getattr(block, "is_error", False)), "content": text[:8000]})
+                    if name.endswith("create_research_job"):
+                        try:
+                            res["job_id"] = int(json.loads(text).get("job_id"))
+                        except Exception:
+                            pass
+        elif isinstance(msg, csdk.ResultMessage):
+            if getattr(msg, "session_id", None):
+                res["session_id"] = msg.session_id
+            if getattr(msg, "is_error", False):
+                res["is_error"] = True
+            res["cost_usd"] = getattr(msg, "total_cost_usd", None)
+    return res
+
+
+async def _run_agent(conv: Conversation, message: str) -> None:
+    """Dispatch a user turn: a fresh research ask runs the full graph pipeline; a follow-up
+    on an existing job runs a single conversational agent turn."""
     conv.busy = True
-    tool_names: dict[str, str] = {}  # tool_use_id -> tool name, to interpret results
-    produced = False       # did this turn emit ANY output (text / thinking / tool)?
-    streamed_text = False  # did text arrive as StreamEvent deltas for the current message?
     try:
-        options = _agent_options(resume=conv.session_id)
-        async with csdk.ClaudeSDKClient(options=options) as client:
-            await client.query(message)
-            responses = client.receive_response()
-            while True:
-                try:
-                    # Inactivity watchdog: if the agent produces nothing for 3 minutes it has
-                    # stalled (a wedged tool, a hung generation). Stop the turn so the UI never
-                    # gets stranded on a spinner with no way out.
-                    msg = await asyncio.wait_for(responses.__anext__(), timeout=180)
-                except StopAsyncIteration:
-                    break
-                except asyncio.TimeoutError:
-                    _emit(conv, {"type": "error", "message": (
-                        "The agent went quiet for 3 minutes and was stopped — it likely stalled "
-                        "on a slow source or a long write-up. Your evidence is saved; ask it to "
-                        "'write the synthesis and export the report' to finish, or try again.")})
-                    try:
-                        await client.interrupt()
-                    except Exception:
-                        pass
-                    break
-                if isinstance(msg, csdk.StreamEvent):
-                    # When available, text and thinking stream as deltas here (nicest UX).
-                    raw = getattr(msg, "event", None) or {}
-                    etype = raw.get("type")
-                    if etype == "content_block_start" and raw.get("content_block", {}).get("type") == "thinking":
-                        _emit(conv, {"type": "thinking_start"})
-                    elif etype == "content_block_delta":
-                        delta = raw.get("delta", {})
-                        if delta.get("type") == "text_delta" and delta.get("text"):
-                            produced = True
-                            streamed_text = True
-                            _emit(conv, {"type": "text", "text": delta["text"]})
-                        elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
-                            produced = True
-                            _emit(conv, {"type": "thinking", "text": delta["thinking"]})
-                elif isinstance(msg, csdk.AssistantMessage):
-                    if getattr(msg, "session_id", None):
-                        conv.session_id = msg.session_id
-                    for block in msg.content:
-                        if isinstance(block, csdk.TextBlock) and block.text.strip() and not streamed_text:
-                            # Fallback: some SDK/CLI versions don't stream text deltas, so take
-                            # the complete text block. Guarded by streamed_text to avoid doubling.
-                            produced = True
-                            _emit(conv, {"type": "text", "text": block.text})
-                        elif isinstance(block, csdk.ToolUseBlock):
-                            produced = True
-                            tool_names[block.id] = block.name
-                            _emit(conv, {
-                                "type": "tool_call",
-                                "name": block.name.replace("mcp__research-oyster__", ""),
-                                "raw_name": block.name,
-                                "input": block.input,
-                            })
-                    streamed_text = False  # reset for the next assistant message in this turn
-                elif isinstance(msg, csdk.UserMessage):
-                    content = msg.content if isinstance(msg.content, list) else []
-                    for block in content:
-                        if isinstance(block, csdk.ToolResultBlock):
-                            produced = True
-                            name = tool_names.get(block.tool_use_id, "")
-                            text = _stringify_tool_result(block.content)
-                            _emit(conv, {
-                                "type": "tool_result",
-                                "name": name.replace("mcp__research-oyster__", ""),
-                                "is_error": bool(getattr(block, "is_error", False)),
-                                "content": text[:8000],
-                            })
-                            _maybe_link_job(conv, name, text)
-                elif isinstance(msg, csdk.ResultMessage):
-                    if getattr(msg, "session_id", None):
-                        conv.session_id = msg.session_id
-                    is_err = bool(getattr(msg, "is_error", False))
-                    # A turn that ends with an error, or produces nothing at all, almost always
-                    # means this machine isn't signed in to Claude (the CLI returned $0/no output).
-                    # Surface it instead of showing a blank "turn complete".
-                    if is_err or not produced:
-                        detail = str(getattr(msg, "result", "") or getattr(msg, "subtype", "")
-                                     or getattr(msg, "api_error_status", "") or "the model returned no output").strip()
-                        _emit(conv, {"type": "error", "message": (
-                            f"The agent finished without an answer ({detail}). "
-                            "The usual cause is that this Mac isn't signed in to Claude: open Terminal and run "
-                            "`claude setup-token`, then restart the Studio. (Or check the terminal running "
-                            "./studio for the exact error.)"
-                        )})
-                    _emit(conv, {
-                        "type": "result",
-                        "is_error": is_err,
-                        "cost_usd": getattr(msg, "total_cost_usd", None),
-                    })
+        if conv.job_ids:
+            await _conversational_turn(conv, message)
+        else:
+            await _run_research_graph(conv, message)
     except Exception as exc:  # never leave the UI hanging
         _emit(conv, {"type": "error", "message": f"{type(exc).__name__}: {exc}"})
     finally:
         conv.busy = False
         _emit(conv, {"type": "done", "session_id": conv.session_id})
+
+
+async def _conversational_turn(conv: Conversation, message: str) -> None:
+    """Follow-up chat / refinement on an existing conversation — one agent with full tools."""
+    def emit(event: dict[str, Any]) -> None:
+        _emit(conv, event)
+
+    async with csdk.ClaudeSDKClient(options=_agent_options(resume=conv.session_id)) as client:
+        await client.query(message)
+        res = await _drive(client, emit, timeout=240)
+    if res["session_id"]:
+        conv.session_id = res["session_id"]
+    if res["job_id"] and res["job_id"] not in conv.job_ids:
+        conv.job_ids.append(res["job_id"])
+        emit({"type": "job_linked", "job_id": res["job_id"]})
+    if res["is_error"] or not res["produced"]:
+        emit({"type": "error", "message": (
+            "The agent finished without an answer. If this persists, make sure this machine is signed "
+            "in to Claude (run `claude auth login` in Terminal), then try again.")})
+    emit({"type": "result", "is_error": res["is_error"], "cost_usd": res["cost_usd"]})
+
+
+async def _run_research_graph(conv: Conversation, message: str) -> None:
+    """Run the graph-orchestrated research pipeline (research_engine/graph.py)."""
+    from research_engine import graph
+
+    store = ResearchStore(Settings().database_url)
+
+    def emit(event: dict[str, Any]) -> None:
+        _emit(conv, event)
+
+    async def run_node(node_id: str, instruction: str, timeout: int) -> dict[str, Any]:
+        emit({"type": "node", "id": node_id, "state": "running"})
+        try:
+            options = _agent_options(resume=None, system_prompt=graph.NODE_PREAMBLE)
+            async with csdk.ClaudeSDKClient(options=options) as client:
+                await client.query(instruction)
+                res = await _drive(client, lambda e: emit({**e, "node": node_id}), timeout=timeout)
+        except Exception as exc:
+            emit({"type": "node", "id": node_id, "state": "failed", "detail": str(exc)[:200]})
+            return {"produced": False, "is_error": True, "job_id": None, "session_id": None, "text": "", "cost_usd": None}
+        if res["job_id"] and res["job_id"] not in conv.job_ids:
+            conv.job_ids.append(res["job_id"])
+            emit({"type": "job_linked", "job_id": res["job_id"]})
+        emit({"type": "node", "id": node_id, "state": "failed" if res["is_error"] else "done"})
+        return res
+
+    def get_dossier(job_id: int) -> dict[str, Any]:
+        try:
+            return store.dossier(job_id)
+        except Exception:
+            return {"evidence": [], "source_runs": [], "synthesis": None}
+
+    await graph.run_graph(message, emit, run_node, get_dossier)
 
 
 def _stringify_tool_result(content: Any) -> str:
@@ -269,20 +305,6 @@ def _stringify_tool_result(content: Any) -> str:
                 parts.append(getattr(part, "text", None) or str(part))
         return "\n".join(parts)
     return json.dumps(content) if isinstance(content, dict) else str(content)
-
-
-def _maybe_link_job(conv: Conversation, tool_name: str, result_text: str) -> None:
-    """When the agent creates a research job, link it so the UI can show its report."""
-    if not tool_name.endswith("create_research_job"):
-        return
-    try:
-        data = json.loads(result_text)
-        job_id = int(data.get("job_id"))
-    except Exception:
-        return
-    if job_id not in conv.job_ids:
-        conv.job_ids.append(job_id)
-        _emit(conv, {"type": "job_linked", "job_id": job_id})
 
 
 # ---------------------------------------------------------------------------
