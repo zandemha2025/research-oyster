@@ -57,16 +57,29 @@ if ! db_ok; then
 fi
 .venv/bin/python main.py migrate >/dev/null 2>&1 && ok "database ready"
 
-# 4. Claude sign-in ------------------------------------------------------------
-# The Studio runs on your own Claude subscription. It uses an already-signed-in
-# claude CLI, or a token from `claude setup-token`. We don't block on it — if you
-# aren't signed in, the first message will say so with the one command to fix it.
-if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && ! grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' .env 2>/dev/null; then
+# 4. Claude sign-in — automatic ------------------------------------------------
+# The Studio runs on your own Claude subscription. If this machine isn't signed in
+# yet, we run the one-time sign-in for you (a browser window opens). No tokens to
+# copy, no files to edit.
+signed_in=0
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' .env 2>/dev/null; then
+  signed_in=1
+elif command -v claude >/dev/null 2>&1 && claude auth status 2>/dev/null | grep -q '"loggedIn": *true'; then
+  signed_in=1
+fi
+if [ "$signed_in" = "0" ]; then
   if command -v claude >/dev/null 2>&1; then
-    ok "using your signed-in Claude CLI"
+    echo
+    info "One-time Claude sign-in — a browser window will open. Approve it, then we continue."
+    claude auth login || true
+    claude auth status 2>/dev/null | grep -q '"loggedIn": *true' \
+      && ok "signed in to Claude" \
+      || warn "Sign-in didn't finish. Re-run ./studio (or the Desktop icon) to try again."
   else
-    warn "Claude CLI not found — if the first message errors, install it and run: claude setup-token"
+    die "The Claude CLI isn't installed. Install it with:  npm install -g @anthropic-ai/claude-code  then re-run."
   fi
+else
+  ok "signed in to Claude"
 fi
 # Load a token from .env if present so the SDK subprocess inherits it.
 set -a; [ -f .env ] && . ./.env >/dev/null 2>&1 || true; set +a
