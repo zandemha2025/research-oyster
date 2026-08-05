@@ -63,9 +63,11 @@ fi
 # --- get the code -----------------------------------------------------------------------
 if [ -d "$DEST/.git" ]; then
   info "Updating existing install…"
+  # Fetch the branch and reset to FETCH_HEAD: a clone that was single-branch on a
+  # different branch won't have an origin/<branch> ref to reset to, but FETCH_HEAD
+  # always points at what we just fetched.
   git -C "$DEST" fetch --depth 1 origin "$BRANCH"
-  git -C "$DEST" checkout "$BRANCH" >/dev/null 2>&1 || true
-  git -C "$DEST" reset --hard "origin/$BRANCH"
+  git -C "$DEST" checkout -B "$BRANCH" FETCH_HEAD >/dev/null 2>&1
 else
   info "Downloading Oyster…"
   git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$DEST"
