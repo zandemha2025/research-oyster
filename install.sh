@@ -170,11 +170,30 @@ if command -v codex >/dev/null 2>&1; then
 fi
 [ -n "$ATTACHED" ] && ok "Attached to $ATTACHED" || warn "No Claude Code or Codex CLI found — install one, then re-run to attach."
 
+# --- desktop launcher (double-click, no terminal typing) --------------------------------
+chmod +x "$DEST/studio" "$DEST/Research Oyster Studio.command" 2>/dev/null || true
+if [ "$PLATFORM" = "macos" ]; then
+  ln -sf "$DEST/Research Oyster Studio.command" "$HOME/Desktop/Research Oyster Studio.command" 2>/dev/null \
+    && ok "Added 'Research Oyster Studio' to your Desktop — double-click it any time" || true
+elif [ -n "${DISPLAY:-}" ] && [ -d "$HOME/Desktop" ]; then
+  cat > "$HOME/Desktop/research-oyster-studio.desktop" <<EOF 2>/dev/null || true
+[Desktop Entry]
+Type=Application
+Name=Research Oyster Studio
+Exec=$DEST/studio
+Terminal=true
+EOF
+  chmod +x "$HOME/Desktop/research-oyster-studio.desktop" 2>/dev/null || true
+  ok "Added a Studio launcher to your Desktop"
+fi
+
 # --- done -------------------------------------------------------------------------------
 echo
 bold "Research Oyster is installed."
 echo
-echo "  Start the Studio (watch the agent research, live):"
+echo "  Start the Studio — just double-click on your Desktop:"
+echo "      \"Research Oyster Studio\""
+echo "  …or from a terminal:"
 echo "      cd \"$DEST\" && ./studio"
 echo
 echo "  Or use it in your AI host (restart it first):"
