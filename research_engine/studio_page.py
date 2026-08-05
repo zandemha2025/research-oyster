@@ -23,6 +23,7 @@ PAGE = r'''<!doctype html>
 .msg.err{color:var(--red)}
 .think{border-left:3px solid #c9b98a;background:#fbf7ec;color:#6b5f3d;padding:8px 12px;margin:0 0 14px;border-radius:0 8px 8px 0;font-size:13px;white-space:pre-wrap}
 .think .lbl{font-weight:650;font-size:11px;text-transform:uppercase;letter-spacing:.5px;opacity:.8}
+.think .tbody{display:block;margin-top:4px}
 .composer{border-top:1px solid var(--line);padding:14px 18px;background:var(--card);display:flex;gap:10px}
 .composer textarea{flex:1;resize:none;font:inherit;padding:11px 13px;border:1px solid #bfc5c1;border-radius:12px;max-height:140px}
 .composer button{font:inherit;font-weight:650;border:0;border-radius:12px;padding:0 20px;background:var(--accent);color:#fff;cursor:pointer}
@@ -77,7 +78,7 @@ PAGE = r'''<!doctype html>
 </div>
 <script>
 const token='__TOKEN__';
-let active=null, es=null, curAssistant=null;
+let active=null, es=null, curAssistant=null, curThinking=null;
 const convs={};
 
 async function api(path,body){const opt=body?{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Token':token},body:JSON.stringify(body)}:{};const r=await fetch(path,opt);const d=await r.json();if(!r.ok)throw new Error(d.error||'request failed');return d}
@@ -98,7 +99,7 @@ function openConversation(cid){active=cid;curAssistant=null;
   refreshConvos();
   if(es)es.close();
   es=new EventSource('/api/chat/stream?conversation_id='+cid);
-  const handlers=['user','text','thinking','tool_call','tool_result','job_linked','result','done','error','ping'];
+  const handlers=['user','text','thinking','thinking_start','tool_call','tool_result','job_linked','result','done','error','ping'];
   handlers.forEach(t=>es.addEventListener(t,ev=>onEvent(t,JSON.parse(ev.data))));
 }
 
@@ -108,10 +109,11 @@ function feedBox(){return document.getElementById('feed')}
 
 function onEvent(type,data){
   if(type==='ping')return;
-  if(type==='user'){curAssistant=null;const m=el('div','msg user',data.text);streamBox().appendChild(m);scrollStream();return}
-  if(type==='text'){if(!curAssistant){curAssistant=el('div','msg assistant');curAssistant.innerHTML='<b class="who">Oyster</b>';const span=el('span','body-text');curAssistant.appendChild(span);streamBox().appendChild(curAssistant)}curAssistant.querySelector('.body-text').textContent+=data.text;scrollStream();return}
-  if(type==='thinking'){curAssistant=null;const t=el('div','think');t.innerHTML='<span class="lbl">thinking</span>\n'+esc(data.text);streamBox().appendChild(t);scrollStream();return}
-  if(type==='tool_call'){addEvt('call','→',data.name,JSON.stringify(data.input,null,2));return}
+  if(type==='user'){curAssistant=null;curThinking=null;const m=el('div','msg user',data.text);streamBox().appendChild(m);scrollStream();return}
+  if(type==='text'){curThinking=null;if(!curAssistant){curAssistant=el('div','msg assistant');curAssistant.innerHTML='<b class="who">Oyster</b>';const span=el('span','body-text');curAssistant.appendChild(span);streamBox().appendChild(curAssistant)}curAssistant.querySelector('.body-text').textContent+=data.text;scrollStream();return}
+  if(type==='thinking_start'){curAssistant=null;curThinking=el('div','think');curThinking.innerHTML='<span class="lbl">thinking</span>';const s=el('span','tbody');curThinking.appendChild(s);streamBox().appendChild(curThinking);scrollStream();return}
+  if(type==='thinking'){curAssistant=null;if(!curThinking){curThinking=el('div','think');curThinking.innerHTML='<span class="lbl">thinking</span>';const s=el('span','tbody');curThinking.appendChild(s);streamBox().appendChild(curThinking)}curThinking.querySelector('.tbody').textContent+=data.text;scrollStream();return}
+  if(type==='tool_call'){curThinking=null;addEvt('call','→',data.name,JSON.stringify(data.input,null,2));return}
   if(type==='tool_result'){addEvt('result'+(data.is_error?' err':''),data.is_error?'✕':'✓',data.name||'result',data.content);return}
   if(type==='job_linked'){const c=convs[active];if(c&&!c.job_ids.includes(data.job_id)){c.job_ids.push(data.job_id);rebuildReportSelect(data.job_id)}refreshConvos();return}
   if(type==='result'){curAssistant=null;if(data.cost_usd!=null){const f=el('div','msg muted','— turn complete · $'+Number(data.cost_usd).toFixed(4));streamBox().appendChild(f)}return}

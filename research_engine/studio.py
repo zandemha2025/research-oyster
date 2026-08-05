@@ -105,7 +105,8 @@ def _agent_options(resume: str | None) -> csdk.ClaudeAgentOptions:
         permission_mode="default",  # bypassPermissions is blocked when running as root
         resume=resume,
         max_turns=80,
-        max_thinking_tokens=6000,  # surface the agent's reasoning as ThinkingBlocks
+        max_thinking_tokens=6000,
+        include_partial_messages=True,  # stream text + thinking deltas live (see _run_agent)
     )
 
 
@@ -147,15 +148,27 @@ async def _run_agent(conv: Conversation, message: str) -> None:
         async with csdk.ClaudeSDKClient(options=options) as client:
             await client.query(message)
             async for msg in client.receive_response():
-                if isinstance(msg, csdk.AssistantMessage):
+                if isinstance(msg, csdk.StreamEvent):
+                    # Live token streaming: text and thinking arrive as deltas here (the
+                    # ThinkingBlock on AssistantMessage comes back empty, so this is the
+                    # only place the reasoning is actually available).
+                    raw = getattr(msg, "event", None) or {}
+                    etype = raw.get("type")
+                    if etype == "content_block_start" and raw.get("content_block", {}).get("type") == "thinking":
+                        _emit(conv, {"type": "thinking_start"})
+                    elif etype == "content_block_delta":
+                        delta = raw.get("delta", {})
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            _emit(conv, {"type": "text", "text": delta["text"]})
+                        elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                            _emit(conv, {"type": "thinking", "text": delta["thinking"]})
+                elif isinstance(msg, csdk.AssistantMessage):
+                    # Text/thinking already streamed via StreamEvent deltas above; here we
+                    # only take the complete tool-use blocks (full input) and the session id.
                     if getattr(msg, "session_id", None):
                         conv.session_id = msg.session_id
                     for block in msg.content:
-                        if isinstance(block, csdk.TextBlock) and block.text.strip():
-                            _emit(conv, {"type": "text", "text": block.text})
-                        elif isinstance(block, csdk.ThinkingBlock) and block.thinking.strip():
-                            _emit(conv, {"type": "thinking", "text": block.thinking})
-                        elif isinstance(block, csdk.ToolUseBlock):
+                        if isinstance(block, csdk.ToolUseBlock):
                             tool_names[block.id] = block.name
                             _emit(conv, {
                                 "type": "tool_call",

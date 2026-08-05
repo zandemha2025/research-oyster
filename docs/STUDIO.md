@@ -84,13 +84,20 @@ on `8765`.
 
 ## Notes / limits (honest)
 
-- **Thinking stream** is best-effort: the SDK exposes `ThinkingBlock`s and the UI
-  renders them, but the `claude` CLI does not reliably surface thinking through the
-  stream, so "watch it think" may show nothing for many turns. Live tool calls and raw
-  results are the reliable transparency surface.
+- **Thinking stream.** Text and thinking are streamed as SDK `StreamEvent` deltas
+  (`include_partial_messages`), and the UI shows a "thinking…" block whenever the model
+  starts reasoning. Whether the reasoning *text* appears depends on the endpoint: on the
+  subscription/CLI path tested here, the model emits a thinking *start* signal but
+  **redacts the thinking content deltas**, so you see the indicator, not the words. If an
+  endpoint exposes thinking deltas, the same wiring streams them verbatim. Live tool calls
+  and raw results are the always-reliable transparency surface.
+- **Network / proxy.** All collection honors `HTTPS_PROXY` + the trusted CA bundle:
+  `crawl_web_page` fetches over httpx (proxy-aware) and `read_twitch_chat` uses Twitch's
+  WebSocket endpoint (`wss://…:443`) with proxy CONNECT — both work behind an agent or
+  corporate egress proxy. (Raw IRC :6667 does not traverse such proxies, which is why chat
+  uses WSS.) Sites that block datacenter IPs (some anonymous Reddit/DuckDuckGo requests)
+  can still return 403/empty; that is recorded honestly in the source-run ledger, and a
+  configured search key (Tavily/Brave/Serper) makes web discovery reliable.
 - **Auth** uses ambient CLI login or `CLAUDE_CODE_OAUTH_TOKEN`. Anthropic does not
   permit third-party apps to silently ride claude.ai login; `claude setup-token` is the
   supported explicit path.
-- **Coverage** in the Studio reflects whatever sources are configured/reachable. This is
-  Phase 1 (the transparency app). Later phases add the per-source run ledger and real
-  Twitch/Discord/X coverage — see the project plan.

@@ -7,6 +7,7 @@ from typing import Any
 import feedparser
 import html as _html
 import httpx
+import os
 import re
 import ipaddress
 import socket
@@ -18,6 +19,9 @@ _TAG_RE = re.compile(r"<[^>]+>")
 # rate-limit anonymous clients; a descriptive UA is the difference between best-effort
 # working and being blocked outright.
 _UA = "ResearchOyster/0.2 (+https://github.com/zandemha2025/research-oyster)"
+# Many sites (Rotten Tomatoes, news outlets) serve a real page to a browser UA but block or
+# empty a bot UA. Page crawling uses this; RSS/API calls keep the honest _UA above.
+_BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
 
 def _plain_text(value: str) -> str:
@@ -340,36 +344,45 @@ async def read_discord_channel(store: ResearchStore, job_id: int, bot_token: str
 
 
 async def crawl_web_page(store: ResearchStore, job_id: int, url: str, query: str = "") -> dict[str, Any]:
-    """Fetch a public page with Scrapling and normalize its readable text and links."""
-    _validate_public_url(url)
-    import anyio
-    from scrapling.fetchers import Fetcher
+    """Fetch a public page over httpx and normalize its readable text and links.
 
-    response = await anyio.to_thread.run_sync(lambda: Fetcher.get(url, timeout=30, stealthy_headers=True))
-    _validate_public_url(str(response.url))
+    We fetch with httpx (which honors HTTPS_PROXY + the trusted CA bundle, so it works
+    behind an agent/corporate egress proxy) and parse the HTML with Scrapling's Selector
+    for the same CSS extraction. A curl-based fetcher that bypasses the proxy fails with a
+    TLS/connection-reset error in proxied environments, which is why we do not use it here.
+    """
+    _validate_public_url(url)
+    from scrapling import Selector
+
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True, trust_env=True,
+                                 headers={"User-Agent": _BROWSER_UA}) as client:
+        response = await client.get(url)
+    final_url = str(response.url)
+    _validate_public_url(final_url)
     raw_id = record_raw_parts(
         store.database_url, job_id, "research.web", "web_page",
-        method="GET", url=str(response.url), status=int(getattr(response, "status", 0) or 0),
-        response_headers=dict(getattr(response, "headers", {}) or {}),
-        content=(getattr(response, "body", None) or str(getattr(response, "html_content", "")).encode("utf-8", "replace")),
+        method="GET", url=final_url, status=response.status_code,
+        response_headers=dict(response.headers),
+        content=response.content,
     )
-    if response.status >= 400:
-        raise ValueError(f"The page returned HTTP {response.status}.")
-    title = (response.css("title::text").get() or url).strip()
-    chunks = [str(text).strip() for text in response.css("body *::text").getall()]
+    if response.status_code >= 400:
+        raise ValueError(f"The page returned HTTP {response.status_code}.")
+    selector = Selector(response.text)
+    title = (selector.css("title::text").get() or url).strip()
+    chunks = [str(text).strip() for text in selector.css("body *::text").getall()]
     excerpt = " ".join(chunk for chunk in chunks if chunk)[:12000]
     if not excerpt:
         raise ValueError("The page did not contain extractable text. Try an Apify Actor or authorized browser route.")
     links = []
-    for href in response.css("a::attr(href)").getall():
-        absolute = urljoin(str(response.url), str(href))
+    for href in selector.css("a::attr(href)").getall():
+        absolute = urljoin(final_url, str(href))
         if absolute.startswith(("http://", "https://")) and absolute not in links:
             links.append(absolute)
         if len(links) >= 100:
             break
-    result = store.add_evidence(job_id, source_type="web", url=str(response.url), title=title, excerpt=excerpt,
-                                query=query, metadata={"status": response.status, "discovered_links": links, "raw_response_id": raw_id})
-    return {**result, "url": str(response.url), "title": title, "text": excerpt, "discovered_links": links, "raw_response_id": raw_id}
+    result = store.add_evidence(job_id, source_type="web", url=final_url, title=title, excerpt=excerpt,
+                                query=query, metadata={"status": response.status_code, "discovered_links": links, "raw_response_id": raw_id})
+    return {**result, "url": final_url, "title": title, "text": excerpt, "discovered_links": links, "raw_response_id": raw_id}
 
 
 # ---------------------------------------------------------------------------
@@ -689,13 +702,14 @@ async def fetch_reddit_thread(store: ResearchStore, job_id: int, url: str, max_c
             "comments_stored": len(comments), "items": stored, "raw_response_id": raw_id}
 
 
-# --- Twitch live chat via anonymous IRC ---------------------------------------
-# Twitch live chat IS autonomously retrievable: anyone can read any channel's chat over
-# IRC with an anonymous "justinfan" nick — no Client ID, no OAuth. This is the legit,
-# no-credential path that replaces the old "live chat is not autonomously retrievable"
-# defeatism.
-_TWITCH_IRC_HOST = "irc.chat.twitch.tv"
-_TWITCH_IRC_PORT = 6667
+# --- Twitch live chat via anonymous IRC-over-WebSocket ------------------------
+# Twitch live chat IS autonomously retrievable: anyone can read any channel's chat with
+# an anonymous "justinfan" nick — no Client ID, no OAuth. We use Twitch's WebSocket chat
+# endpoint (wss://…:443) rather than raw IRC (tcp:6667) because 443 is what browsers use
+# and, crucially, what a corporate/agent HTTPS CONNECT proxy will tunnel — raw IRC ports
+# do not traverse such proxies. This replaces the old "live chat is not autonomously
+# retrievable" defeatism.
+_TWITCH_WS_URL = "wss://irc-ws.chat.twitch.tv:443"
 
 
 def _parse_irc_line(line: str) -> dict[str, Any] | None:
@@ -723,40 +737,55 @@ def _parse_irc_line(line: str) -> dict[str, Any] | None:
 
 
 def _read_twitch_chat_blocking(channel: str, seconds: int, limit: int) -> tuple[list[dict[str, Any]], str]:
-    """Anonymous read of a channel's live IRC chat. Blocking — run in a worker thread."""
+    """Anonymous read of a channel's live chat over WebSocket. Blocking — run in a thread.
+
+    Routes through an HTTPS proxy when one is configured (HTTPS_PROXY), so it works both
+    behind an agent/corporate egress proxy and on a direct connection.
+    """
     import time as _time
+    import websocket  # websocket-client
 
     channel = channel.lstrip("#").lower().strip()
+    kwargs: dict[str, Any] = {"timeout": 8}
+    ca_bundle = os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE")
+    if ca_bundle:
+        kwargs["sslopt"] = {"ca_certs": ca_bundle}
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if proxy:
+        parsed_proxy = urlparse(proxy)
+        kwargs.update(http_proxy_host=parsed_proxy.hostname, http_proxy_port=parsed_proxy.port, proxy_type="http")
+
     messages: list[dict[str, Any]] = []
     transcript: list[str] = []
-    sock = socket.create_connection((_TWITCH_IRC_HOST, _TWITCH_IRC_PORT), timeout=10)
+    ws = websocket.create_connection(_TWITCH_WS_URL, **kwargs)
     try:
-        sock.settimeout(2.0)
+        ws.settimeout(2.0)
         nick = f"justinfan{(abs(hash(channel)) % 80000) + 1000}"
-        sock.sendall(f"PASS SCHMOOPIIE\r\nNICK {nick}\r\nJOIN #{channel}\r\n".encode())
+        ws.send("PASS SCHMOOPIIE")
+        ws.send(f"NICK {nick}")
+        ws.send(f"JOIN #{channel}")
         deadline = _time.monotonic() + max(2, min(seconds, 30))
-        buffer = ""
         while _time.monotonic() < deadline and len(messages) < limit:
             try:
-                chunk = sock.recv(4096).decode("utf-8", "replace")
-            except socket.timeout:
+                data = ws.recv()
+            except websocket.WebSocketTimeoutException:
                 continue
-            if not chunk:
+            except Exception:
                 break
-            buffer += chunk
-            while "\r\n" in buffer:
-                raw, buffer = buffer.split("\r\n", 1)
+            for raw in str(data).split("\r\n"):
+                if not raw:
+                    continue
                 transcript.append(raw)
                 parsed = _parse_irc_line(raw)
                 if not parsed:
                     continue
                 if "ping" in parsed:
-                    sock.sendall(f"PONG {parsed['ping']}\r\n".encode())
+                    ws.send(f"PONG {parsed['ping']}")
                 elif "text" in parsed:
                     messages.append(parsed)
     finally:
         try:
-            sock.close()
+            ws.close()
         except Exception:
             pass
     return messages, "\n".join(transcript)
@@ -778,7 +807,7 @@ async def read_twitch_chat(store: ResearchStore, job_id: int, channel: str,
     )
     raw_id = record_raw_parts(
         store.database_url, job_id, "research.twitch_chat", "twitch_irc",
-        method="IRC", url=f"irc://{_TWITCH_IRC_HOST}/#{channel.lower()}", status=200,
+        method="WSS", url=f"{_TWITCH_WS_URL}/#{channel.lower()}", status=200,
         content=transcript.encode("utf-8", "replace"),
     )
     stored = []
