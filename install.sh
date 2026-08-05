@@ -205,8 +205,14 @@ echo "  Optional browser capture — load the extension once:"
 echo "      Chrome/Edge → Extensions → Developer mode → Load unpacked → $DEST/browser_extension"
 echo
 
-# Launch the dashboard now so the browser opens (best-effort; ignore if headless).
+# Open the Studio now so the browser lands on the right place — NOT the old dashboard.
+# Only auto-open when already signed in (a background launch can't do the interactive
+# sign-in); otherwise tell the user to double-click the Desktop icon, which can.
 if [ "$PLATFORM" = "macos" ] || [ -n "${DISPLAY:-}" ]; then
-  info "Opening the dashboard…"
-  nohup "$DEST/.venv/bin/python" "$DEST/control_center.py" >/tmp/research-oyster.log 2>&1 &
+  if command -v claude >/dev/null 2>&1 && claude auth status 2>/dev/null | grep -q '"loggedIn": *true'; then
+    info "Opening Research Oyster Studio…"
+    OYSTER_NO_BROWSER=0 nohup "$DEST/studio" >/tmp/research-oyster-studio.log 2>&1 &
+  else
+    info "Double-click 'Research Oyster Studio' on your Desktop to start."
+  fi
 fi
