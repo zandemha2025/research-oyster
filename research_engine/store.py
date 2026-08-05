@@ -57,6 +57,22 @@ class ResearchStore:
             conn.commit()
         return {"job_id": job_id, "saved": True}
 
+    def record_source_run(self, job_id: int, connector: str, query: str = "", *,
+                          outcome: str, yield_count: int = 0, http_status: int | None = None,
+                          error_text: str = "", raw_response_id: int | None = None) -> None:
+        """Record one collection attempt's real outcome. This is the ledger the synthesis
+        must be held to — a source that ran and yielded nothing is 'empty'/'error', never
+        silently reportable as 'not available'."""
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO research_source_runs
+                   (job_id, connector, query, outcome, http_status, yield_count, error_text, raw_response_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (job_id, connector, query or None, outcome, http_status, yield_count,
+                 (error_text or None), raw_response_id),
+            )
+            conn.commit()
+
     def dossier(self, job_id: int) -> dict[str, Any]:
         with connect(self.database_url) as conn, conn.cursor() as cur:
             cur.execute("SELECT * FROM research_jobs WHERE id=%s", (job_id,))
@@ -65,17 +81,27 @@ class ResearchStore:
                 raise ValueError(f"Research job {job_id} was not found.")
             cur.execute("SELECT * FROM research_evidence WHERE job_id=%s ORDER BY collected_at DESC", (job_id,))
             evidence = cur.fetchall()
+            cur.execute(
+                """SELECT connector, query, outcome, http_status, yield_count, error_text, attempted_at
+                   FROM research_source_runs WHERE job_id=%s ORDER BY attempted_at, id""",
+                (job_id,),
+            )
+            source_runs = cur.fetchall()
         items = [{key: (value.isoformat() if hasattr(value, "isoformat") else value) for key, value in row.items() if key != "content_hash"} for row in evidence]
         counts: dict[str, int] = {}
         for item in items:
             counts[item["source_type"]] = counts.get(item["source_type"], 0) + 1
         job_view = {key: (value.isoformat() if hasattr(value, "isoformat") else value) for key, value in job.items()}
+        runs = [{key: (value.isoformat() if hasattr(value, "isoformat") else value) for key, value in row.items()} for row in source_runs]
         # Coverage is informational for the model (where has it looked, how much), not a
         # definition of "done" — a job is done when the synthesis answers the question.
+        # source_runs is the authoritative ledger: every attempt and its real outcome, so
+        # the synthesis cannot report a failed/empty source as merely "not available".
         return {
             "job": job_view,
             "evidence": items,
             "coverage": counts,
+            "source_runs": runs,
             "synthesis": job_view.get("synthesis"),
         }
 

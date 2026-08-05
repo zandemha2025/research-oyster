@@ -104,6 +104,7 @@ def export_job(store: ResearchStore, job_id: int, output_dir: Path | str = Path(
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         findings=_group_findings(evidence),
         coverage=[{"source": source, "count": count} for source, count in dossier.get("coverage", {}).items()],
+        source_runs=dossier.get("source_runs", []),
         evidence_count=len(evidence),
     )
 

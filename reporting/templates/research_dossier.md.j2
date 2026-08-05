@@ -57,3 +57,14 @@ No evidence was stored for this job.
 |---|---|
 {% for row in coverage %}| {{ row.source | cell }} | {{ row.count }} |
 {% endfor %}
+{% if source_runs %}
+## Appendix D — data collection log
+
+Every collection attempt and what it actually returned. An outcome of `empty`, `error`,
+or `rate_limited` means the source was **attempted and failed** — it is not "not available".
+
+| Connector | Query | Outcome | Yield | Note |
+|---|---|---|---|---|
+{% for run in source_runs %}| {{ run.connector | cell }} | {{ (run.query or '') | cell }} | {{ run.outcome | cell }}{% if run.http_status %} ({{ run.http_status }}){% endif %} | {{ run.yield_count }} | {{ (run.error_text or '') | cell }} |
+{% endfor %}
+{% endif %}

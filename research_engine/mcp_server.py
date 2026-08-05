@@ -48,9 +48,70 @@ mcp = MCPServer(
         "Twitch/Kick chat) get ONE sentence under limitations, never a section and never the headline. "
         "If a connector returns {\"not_configured\": true}, try its free fallbacks (search_web, "
         "search_reddit, crawl_web_page) — do not stop and do not hand the user a setup to-do list as the "
-        "answer. Never export without a synthesis that answers the question."
+        "answer. Never export without a synthesis that answers the question.\n\n"
+        "Report failures honestly. A source that RAN and returned nothing usable — an empty result "
+        "set, HTTP 403/429, or an error — is a FAILED attempt, not an absent capability. Say "
+        "'attempted, returned no usable data' (and why), NEVER 'not available'. 'Not available' is "
+        "only for a source you never ran or cannot run (no credentials, a venue you're not in). "
+        "get_research_dossier returns a source_runs ledger of what every attempt actually did; "
+        "reconcile your confidence and limitations against it — do not describe an outcome the "
+        "ledger contradicts."
     ),
 )
+
+
+# --- Source-run ledger --------------------------------------------------------
+# Every collection tool records what actually happened (attempted, outcome, yield) into
+# research_source_runs, so the authored synthesis can be held to the truth instead of
+# narrating a failed/empty source as "not available". Recording is best-effort and never
+# breaks a tool call.
+def _yield_of(result: dict[str, Any]) -> int:
+    for key in ("matched", "stored", "received", "scanned"):
+        if result.get(key) is not None:
+            return int(result[key])
+    for key in ("results", "items", "comments", "discovered_links"):
+        value = result.get(key)
+        if isinstance(value, list):
+            return len(value)
+    if result.get("text") or result.get("guild_name") or result.get("post_stored"):
+        return 1
+    return 0
+
+
+def _classify_error(exc: Exception) -> tuple[str, int | None]:
+    import re
+
+    text = str(exc)
+    match = re.search(r"\b([1-5]\d\d)\b", text)
+    status = int(match.group(1)) if match else None
+    low = text.lower()
+    if status in (403, 429) or "rate" in low or "blocked" in low or "too many" in low:
+        return "rate_limited", status
+    return "error", status
+
+
+async def _tracked(connector: str, job_id: int, query: str, coro) -> dict[str, Any]:
+    """Await a collection connector and record its real outcome in the ledger."""
+    try:
+        result = await coro
+    except Exception as exc:
+        outcome, status = _classify_error(exc)
+        try:
+            store.record_source_run(job_id, connector, query, outcome=outcome,
+                                    http_status=status, yield_count=0, error_text=str(exc)[:1000])
+        except Exception:
+            pass
+        raise
+    if isinstance(result, dict):
+        count = _yield_of(result)
+        outcome = "not_configured" if result.get("not_configured") else ("ok" if count > 0 else "empty")
+        try:
+            store.record_source_run(job_id, connector, query, outcome=outcome, yield_count=count,
+                                    error_text=str(result.get("error", ""))[:1000],
+                                    raw_response_id=result.get("raw_response_id"))
+        except Exception:
+            pass
+    return result
 
 
 @mcp.tool()
@@ -83,50 +144,54 @@ def add_evidence(job_id: int, source_type: str, url: str, title: str, excerpt: s
 @mcp.tool()
 async def fetch_rss(job_id: int, feed_url: str, query_terms: list[str], limit: int = 50) -> dict[str, Any]:
     """Fetch an RSS/Atom feed and store entries matching any supplied research term."""
-    return await fetch_rss_connector(store, job_id, feed_url, query_terms, limit)
+    return await _tracked("rss", job_id, feed_url, fetch_rss_connector(store, job_id, feed_url, query_terms, limit))
 
 
 @mcp.tool()
 async def search_x(job_id: int, query: str, max_results: int = 25) -> dict[str, Any]:
     """Search recent public X posts through the official API and store them as evidence."""
-    return await search_x_connector(store, job_id, settings.x_bearer_token, query, max_results)
+    return await _tracked("x", job_id, query, search_x_connector(store, job_id, settings.x_bearer_token, query, max_results))
 
 
 @mcp.tool()
 async def inspect_discord_invite(job_id: int, invite_url_or_code: str) -> dict[str, Any]:
     """Inspect and store public metadata for any Discord invite discovered during research."""
-    return await inspect_discord_connector(store, job_id, invite_url_or_code)
+    return await _tracked("discord_invite", job_id, invite_url_or_code, inspect_discord_connector(store, job_id, invite_url_or_code))
 
 
 @mcp.tool()
 async def run_apify_actor(job_id: int, actor_id: str, actor_input: dict[str, Any],
                           source_type: str, limit: int = 100) -> dict[str, Any]:
     """Run any chosen Apify Actor and store its dataset items as evidence."""
-    return await run_apify_connector(store, job_id, settings.apify_token, actor_id, actor_input, source_type, limit)
+    return await _tracked(f"apify:{source_type}", job_id, actor_id,
+                          run_apify_connector(store, job_id, settings.apify_token, actor_id, actor_input, source_type, limit))
 
 
 @mcp.tool()
 async def search_twitch(job_id: int, query: str, limit: int = 40) -> dict[str, Any]:
     """Search arbitrary Twitch channels and categories rather than a fixed game watchlist."""
-    return await search_twitch_connector(store, job_id, settings.twitch_client_id, settings.twitch_client_secret, query, limit)
+    return await _tracked("twitch", job_id, query,
+                          search_twitch_connector(store, job_id, settings.twitch_client_id, settings.twitch_client_secret, query, limit))
 
 
 @mcp.tool()
 async def search_kick(job_id: int, query: str, pages: int = 3) -> dict[str, Any]:
     """Search active Kick streams for any topic, category, creator, or title."""
-    return await search_kick_connector(store, job_id, settings.kick_client_id, settings.kick_client_secret, query, pages)
+    return await _tracked("kick", job_id, query,
+                          search_kick_connector(store, job_id, settings.kick_client_id, settings.kick_client_secret, query, pages))
 
 
 @mcp.tool()
 async def read_discord_channel(job_id: int, channel_id: str, limit: int = 50) -> dict[str, Any]:
     """Read messages from a Discord channel where the configured bot has explicit access."""
-    return await read_discord_connector(store, job_id, settings.discord_bot_token, channel_id, limit)
+    return await _tracked("discord_channel", job_id, channel_id,
+                          read_discord_connector(store, job_id, settings.discord_bot_token, channel_id, limit))
 
 
 @mcp.tool()
 async def crawl_web_page(job_id: int, url: str, query: str = "") -> dict[str, Any]:
     """Collect readable text and links from a public webpage with the self-hosted adaptive crawler."""
-    return await crawl_web_connector(store, job_id, url, query)
+    return await _tracked("web_crawl", job_id, url, crawl_web_connector(store, job_id, url, query))
 
 
 @mcp.tool()
@@ -136,34 +201,39 @@ async def search_web(job_id: int, query: str, limit: int = 10) -> dict[str, Any]
     Results are leads, not stored evidence — read the promising ones and store what answers
     the question. Uses a configured search key if present, otherwise a free web provider.
     """
-    return await search_web_connector(store, job_id, query, limit,
-                                      tavily_key=settings.tavily_api_key, brave_key=settings.brave_api_key,
-                                      serper_key=settings.serper_api_key)
+    return await _tracked("web_search", job_id, query,
+                          search_web_connector(store, job_id, query, limit,
+                                               tavily_key=settings.tavily_api_key, brave_key=settings.brave_api_key,
+                                               serper_key=settings.serper_api_key))
 
 
 @mcp.tool()
 async def discover_sources(job_id: int, topic: str) -> dict[str, Any]:
     """Find where a topic is actually being discussed, grouped by venue (reddit, forums, news, etc.)."""
-    return await discover_sources_connector(store, job_id, topic,
-                                           tavily_key=settings.tavily_api_key, brave_key=settings.brave_api_key,
-                                           serper_key=settings.serper_api_key)
+    return await _tracked("discover_sources", job_id, topic,
+                          discover_sources_connector(store, job_id, topic,
+                                                     tavily_key=settings.tavily_api_key, brave_key=settings.brave_api_key,
+                                                     serper_key=settings.serper_api_key))
 
 
 @mcp.tool()
 async def search_reddit(job_id: int, query: str, limit: int = 25, subreddit: str = "") -> dict[str, Any]:
     """Search Reddit's public JSON for posts on a topic and store matches as evidence (free, no key)."""
-    return await search_reddit_connector(store, job_id, query, limit, subreddit)
+    return await _tracked("reddit_search", job_id, query, search_reddit_connector(store, job_id, query, limit, subreddit))
 
 
 @mcp.tool()
 async def fetch_reddit_thread(job_id: int, url: str, max_comments: int = 40) -> dict[str, Any]:
     """Read a Reddit thread's post and top comments (public JSON) and store them as evidence (free, no key)."""
-    return await fetch_reddit_thread_connector(store, job_id, url, max_comments)
+    return await _tracked("reddit_thread", job_id, url, fetch_reddit_thread_connector(store, job_id, url, max_comments))
 
 
 @mcp.tool()
 def get_research_dossier(job_id: int) -> dict[str, Any]:
-    """Return a research job with its plan, evidence, source coverage, and remaining gaps."""
+    """Return a research job with its plan, evidence, source coverage, and the source_runs
+    ledger — every collection attempt and its real outcome (ok/empty/rate_limited/error/
+    not_configured). Reconcile your synthesis's limitations against source_runs: a run that
+    is 'empty' or 'error' was attempted and failed, and must not be reported as 'not available'."""
     return store.dossier(job_id)
 
 
@@ -206,8 +276,11 @@ def write_research_synthesis(
     - sentiment: the overall mood and how it breaks down.
     - recommendations: concrete, decision-ready next actions.
     - confidence: one honest paragraph on how confident you are and why.
-    - limitations: ONE short paragraph on what you could not reach (e.g. private servers,
-      live chat) — never a menu of setup instructions, never the headline.
+    - limitations: ONE short paragraph on what constrained the research. Distinguish
+      HONESTLY, using the get_research_dossier source_runs ledger: sources you never ran
+      or cannot run are "not available"; sources that RAN and returned nothing usable
+      (empty, HTTP 403/429, error) are "attempted, returned no usable data" — never call
+      a failed attempt "not available". Never a menu of setup instructions, never the headline.
 
     export_research_report will refuse to run until this exists.
     """
