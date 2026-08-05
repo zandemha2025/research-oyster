@@ -6,6 +6,8 @@ The repository also includes Gaming Culture Pulse, a browser control center and 
 
 The optional **Research Oyster Capture** browser extension adds supervised evidence capture for Discord, X, Twitch chat, Reddit, and other pages a researcher can already access. Candidates stay in the extension until the user explicitly approves them; approved excerpts enter the original research job and dossier.
 
+The optional **Research Oyster Studio** is a local chat UI where you talk to the research agent and **watch it work live** — every tool call, every raw result, and the report inline — running on your own Claude subscription (no API key). See [docs/STUDIO.md](docs/STUDIO.md).
+
 ## What a user gives Oyster
 
 Only a subject and the decision the research should support are required:

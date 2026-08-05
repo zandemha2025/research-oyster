@@ -1,0 +1,17 @@
+#!/bin/zsh
+# Launch the Research Oyster Studio — a local, transparent chat UI over the agent.
+# Runs in its own venv (.venv-studio) because the claude-agent-sdk needs mcp<2.0
+# while the MCP server needs mcp>=2.0; the Studio launches the server as a subprocess
+# via .venv, so the two mcp versions never collide. See docs/STUDIO.md.
+set -e
+cd "${0:A:h}"
+
+if [[ ! -x .venv-studio/bin/python ]]; then
+  echo "Studio venv not found. Run: ./setup-studio.sh" >&2
+  exit 1
+fi
+
+# Auth: uses the ambient `claude` CLI login, or a per-user subscription token.
+# Get one with `claude setup-token` and export it before launching:
+#   export CLAUDE_CODE_OAUTH_TOKEN=...    (or put it in .env and source it)
+exec .venv-studio/bin/python -m research_engine.studio
