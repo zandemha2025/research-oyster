@@ -144,12 +144,12 @@ def collect_prompt(lane: str, state: ResearchState) -> str:
     return prompts.get(lane, prompts["web"])
 
 
-def synth_prompt(state: ResearchState) -> str:
+def synth_prompt(state: ResearchState, final: bool = False) -> str:
     parts = [
         f"SYNTHESIZE step for job {state.job_id}. First call get_research_dossier({state.job_id}) to see all "
-        f"evidence and the source_runs ledger. Then call write_research_synthesis with: executive_answer, "
-        f"themes (each backed by real cited quotes with URLs), tensions, sentiment, recommendations, confidence, "
-        f"and limitations."
+        f"evidence and the source_runs ledger. Then you MUST call write_research_synthesis with a NON-EMPTY "
+        f"executive_answer that directly answers the brief, plus themes (each backed by real cited quotes with "
+        f"URLs where you have them), tensions, sentiment, recommendations, confidence, and limitations."
     ]
     if state.named_platforms:
         parts.append(
@@ -158,8 +158,18 @@ def synth_prompt(state: ResearchState) -> str:
         )
     if state.gaps:
         parts.append(f"A prior review found these gaps to address: {'; '.join(state.gaps)}.")
+    parts.append(
+        "Even if the evidence is thin, synthesize what you HAVE and state the limits honestly — do NOT finish "
+        "this step without calling write_research_synthesis with a real executive_answer."
+    )
+    if final:
+        parts.append("This is the FINAL synthesis attempt; author it now from whatever evidence exists.")
     parts.append("Do NOT export.")
     return " ".join(parts)
+
+
+def _has_synthesis(dossier: dict[str, Any]) -> bool:
+    return bool((dossier.get("synthesis") or {}).get("executive_answer"))
 
 
 def export_prompt(state: ResearchState) -> str:
@@ -207,5 +217,18 @@ async def run_graph(brief: str, emit: Emit, run_node: RunNode, get_dossier: GetD
         if verdict == "pass":
             break
         emit({"type": "note", "text": f"Review found gaps — looping to collect more: {'; '.join(gaps)}"})
+
+    # Guarantee a synthesis exists before export — otherwise export_research_report has nothing
+    # to write and the run ends with no report. If the loop never produced one, force a final pass.
+    if not _has_synthesis(get_dossier(state.job_id)):
+        emit({"type": "note", "text": "No synthesis yet — forcing a final write-up from the evidence gathered."})
+        await run_node("synthesize", synth_prompt(state, final=True), TIMEOUTS["synthesize"])
+
+    if not _has_synthesis(get_dossier(state.job_id)):
+        emit({"type": "error", "message": (
+            "The pipeline collected evidence but could not author a synthesis, so there is no report yet. "
+            "Ask it directly in the chat: 'write the synthesis and export the report for job "
+            f"{state.job_id}'.")})
+        return
 
     await run_node("export", export_prompt(state), TIMEOUTS["export"])
