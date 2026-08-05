@@ -114,11 +114,11 @@ function onEvent(type,data){
   if(type==='thinking_start'){curAssistant=null;curThinking=el('div','think');curThinking.innerHTML='<span class="lbl">thinking</span>';const s=el('span','tbody');curThinking.appendChild(s);streamBox().appendChild(curThinking);scrollStream();return}
   if(type==='thinking'){curAssistant=null;if(!curThinking){curThinking=el('div','think');curThinking.innerHTML='<span class="lbl">thinking</span>';const s=el('span','tbody');curThinking.appendChild(s);streamBox().appendChild(curThinking)}curThinking.querySelector('.tbody').textContent+=data.text;scrollStream();return}
   if(type==='tool_call'){curThinking=null;addEvt('call','→',data.name,JSON.stringify(data.input,null,2));return}
-  if(type==='tool_result'){addEvt('result'+(data.is_error?' err':''),data.is_error?'✕':'✓',data.name||'result',data.content);return}
+  if(type==='tool_result'){addEvt('result'+(data.is_error?' err':''),data.is_error?'✕':'✓',data.name||'result',data.content);if(/export_research_report|write_research_synthesis/.test(data.name||'')){const c=convs[active];if(c&&c.job_ids&&c.job_ids.length)setTimeout(()=>rebuildReportSelect(c.job_ids[c.job_ids.length-1]),600)}return}
   if(type==='job_linked'){const c=convs[active];if(c&&!c.job_ids.includes(data.job_id)){c.job_ids.push(data.job_id);rebuildReportSelect(data.job_id)}refreshConvos();return}
   if(type==='result'){curAssistant=null;if(data.cost_usd!=null){const f=el('div','msg muted','— turn complete · $'+Number(data.cost_usd).toFixed(4));streamBox().appendChild(f)}return}
   if(type==='error'){curAssistant=null;const m=el('div','msg err');m.innerHTML='<b class="who">error</b>'+esc(data.message);streamBox().appendChild(m);scrollStream();return}
-  if(type==='done'){document.getElementById('input').disabled=false;document.getElementById('sendbtn').disabled=false;return}
+  if(type==='done'){document.getElementById('input').disabled=false;document.getElementById('sendbtn').disabled=false;const c=convs[active];if(c&&c.job_ids&&c.job_ids.length)rebuildReportSelect(c.job_ids[c.job_ids.length-1]);return}
 }
 
 function addEvt(cls,ico,name,body){const f=feedBox();if(f.querySelector('.empty'))f.innerHTML='';
@@ -134,7 +134,7 @@ function rebuildReportSelect(select){const c=convs[active];const sel=document.ge
   c.job_ids.forEach(j=>{const o=el('option',null,'Report — job #'+j);o.value=j;sel.appendChild(o)});
   const pick=select||c.job_ids[c.job_ids.length-1];sel.value=pick;loadReport(pick);
 }
-function loadReport(j){if(j)document.getElementById('reportFrame').src='/api/report/'+j}
+function loadReport(j){if(j)document.getElementById('reportFrame').src='/api/report/'+j+'?_='+Date.now()}
 
 function showTab(which){document.getElementById('tabFeed').classList.toggle('active',which==='feed');document.getElementById('tabReport').classList.toggle('active',which==='report');document.getElementById('feed').style.display=which==='feed'?'block':'none';document.getElementById('reportPane').style.display=which==='report'?'flex':'none'}
 
