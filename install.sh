@@ -124,6 +124,15 @@ info "Installing Python packages…"
 .venv/bin/python -m pip install --quiet -r requirements.txt
 ok "Packages installed"
 
+# --- studio env (the live chat UI; separate venv, see docs/STUDIO.md) --------------------
+if [ -f requirements-studio.txt ]; then
+  [ -d .venv-studio ] || python3 -m venv .venv-studio
+  info "Installing Studio packages…"
+  .venv-studio/bin/python -m pip install --quiet --upgrade pip
+  .venv-studio/bin/python -m pip install --quiet -r requirements-studio.txt
+  ok "Studio ready"
+fi
+
 # --- .env (never overwrite an existing one) ---------------------------------------------
 if [ ! -f .env ]; then
   umask 077
@@ -165,10 +174,10 @@ fi
 echo
 bold "Research Oyster is installed."
 echo
-echo "  Open the dashboard any time:"
-echo "      \"$DEST/.venv/bin/python\" \"$DEST/control_center.py\""
+echo "  Start the Studio (watch the agent research, live):"
+echo "      cd \"$DEST\" && ./studio"
 echo
-echo "  Use it in your AI host (restart it first):"
+echo "  Or use it in your AI host (restart it first):"
 echo "      \"Use Research Oyster to research …\""
 echo
 echo "  Optional browser capture — load the extension once:"

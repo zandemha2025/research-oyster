@@ -33,27 +33,31 @@ The Studio launches the MCP server as a **subprocess over stdio** (`.venv/bin/py
 research_engine.mcp_server`), so the two `mcp` versions never collide, and the agent
 inherits all existing research tools with zero new tool code.
 
-## Setup
+## Setup — two commands, total
+
+**First time on a machine** (installs Python + PostgreSQL, creates the database, sets up
+both envs):
 
 ```bash
-# 1. main app must be set up first: .venv exists, DATABASE_URL set in .env, migrated
-python main.py migrate
-
-# 2. create the Studio venv
-./setup-studio.sh
-
-# 3. authenticate on your own Claude subscription (one time)
-claude setup-token
-export CLAUDE_CODE_OAUTH_TOKEN=...        # the token setup-token prints
-# (or skip this if your `claude` CLI is already logged in — ambient login also works)
-
-# 4. launch
-./research-oyster-studio
-# open http://127.0.0.1:8770/
+curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | OYSTER_BRANCH=claude/demo-prep-p0iazw bash
 ```
 
-Each person runs the Studio against **their own** login — the app only reads a token
-from the environment and never sees whose it is. Nobody shares an account.
+**Every time you want it** (from the install directory, e.g. `~/research-oyster`):
+
+```bash
+./studio
+```
+
+That's it. `./studio` is idempotent and self-healing: it sets up anything missing,
+starts the database, runs migrations, checks you're signed in to Claude, launches the
+app, and opens `http://127.0.0.1:8770/` in your browser. Run it every time — it only
+does the missing steps.
+
+**Signing in to Claude** (once): the Studio runs on your own subscription. If your
+`claude` CLI is already logged in, nothing to do. Otherwise run `claude setup-token`
+once and either `export CLAUDE_CODE_OAUTH_TOKEN=...` or paste that line into `.env`.
+Each person runs against **their own** login — the app only reads a token from the
+environment and never sees whose it is. Nobody shares an account.
 
 ## Using it
 

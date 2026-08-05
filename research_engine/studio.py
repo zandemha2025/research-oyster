@@ -367,9 +367,15 @@ from research_engine.studio_page import PAGE  # noqa: E402
 
 
 def main() -> None:
+    import threading
+    import webbrowser
+
     import uvicorn
 
-    print(f"Research Oyster Studio is open at http://127.0.0.1:{STUDIO_PORT}/")
+    url = f"http://127.0.0.1:{STUDIO_PORT}/"
+    print(f"Research Oyster Studio is open at {url}")
+    if os.environ.get("OYSTER_NO_BROWSER") != "1":
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     uvicorn.run(app, host="127.0.0.1", port=STUDIO_PORT, log_level="warning")
 
 
