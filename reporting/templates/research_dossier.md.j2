@@ -2,8 +2,22 @@
 
 _Generated {{ generated_at }} · job #{{ job.id }} · answer drawn from {{ evidence_count }} pieces of evidence across {{ coverage | length }} source types_
 
-## Executive answer
+{% if synthesis.point_of_view %}## Our point of view
+{{ synthesis.point_of_view }}
+
+{% endif %}## Executive answer
 {{ synthesis.executive_answer }}
+{% if synthesis.metrics_tables %}
+## The numbers
+{% for table in synthesis.metrics_tables %}
+### {{ table.title | cell }}{% if table.unit %} ({{ table.unit | cell }}){% endif %}
+
+| {{ (table.group_by or 'Group') | cell }} | Median | n | Range |
+|---|---|---|---|
+{% for r in table.rows %}| {{ r.group | cell }} | {{ r.median if r.median is not none else '—' }} | {{ r.n if r.n is not none else '—' }} | {% if r.min is not none and r.max is not none %}{{ r.min }}–{{ r.max }}{% else %}—{% endif %} |
+{% endfor %}{% if table.note %}
+_{{ table.note | cell }}_
+{% endif %}{% endfor %}{% endif %}
 
 ## Key themes
 {% if not synthesis.themes %}
@@ -26,11 +40,18 @@ No distinct themes were recorded.
 None recorded.
 {% endif %}{% for rec in synthesis.recommendations %}- {{ rec | cell }}
 {% endfor %}
+{% if synthesis.method %}## Method — how the numbers were made
+{{ synthesis.method }}
+{% endif %}
 ## Confidence and limitations
 {% if synthesis.confidence %}{{ synthesis.confidence }}
 {% endif %}{% if synthesis.limitations %}
 {{ synthesis.limitations }}
 {% endif %}
+{% if synthesis.numbered_sources %}
+## Sources
+{% for s in synthesis.numbered_sources %}{{ '[' ~ s.n ~ ']' }} {{ s.label | cell }}{% if s.tool %} · {{ s.tool | cell }}{% endif %}{% if s.url %} · {{ s.url }}{% endif %}{% if s.pulled_at %} · pulled {{ s.pulled_at | cell }}{% endif %}{% if s.note %} — {{ s.note | cell }}{% endif %}
+{% endfor %}{% endif %}
 
 ---
 

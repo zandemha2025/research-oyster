@@ -148,26 +148,58 @@ def collect_prompt(lane: str, state: ResearchState) -> str:
     return prompts.get(lane, prompts["web"])
 
 
+def quantify_prompt(state: ResearchState) -> str:
+    j, brief = state.job_id, state.brief
+    return (
+        f"QUANTIFY step for job {j}. Turn the data you collected into REAL numbers — this is what makes "
+        f"the report consultant-grade instead of a summary. First call list_metric_fields({j}) to see which "
+        f'numeric fields were actually captured. Then call compute_metric / compute_rate for the metrics that '
+        f'matter for "{brief}": e.g. median views/likes/followers by entity, or a rate like shares/views or '
+        f"comments/views — each grouped sensibly (by entity or source_type) and carrying its sample size n. "
+        f"Report the computed tables briefly (figure + n). If no numeric fields were captured, say so plainly "
+        f"in one line — do not invent numbers. Do NOT synthesize or export."
+    )
+
+
+def verify_prompt(state: ResearchState) -> str:
+    j = state.job_id
+    return (
+        f"VERIFY step for job {j}. Steelman-check the emerging answer. First get_research_dossier({j}) to read the "
+        f"current synthesis and evidence. Then ATTACK the main claim from another angle: re-pull a thin sample for a "
+        f"bigger n, cross-check a key number on a SECOND source or platform, or hunt the strongest DISCONFIRMING "
+        f"evidence. Store what you find via add_evidence and note it as a verification check. Then report in 2–3 "
+        f"sentences whether the claim held up, needs a caveat, or should change. Do NOT rewrite the synthesis or export."
+    )
+
+
 def synth_prompt(state: ResearchState, final: bool = False) -> str:
     parts = [
         f"SYNTHESIZE step for job {state.job_id}. First call get_research_dossier({state.job_id}) to see all "
-        f"evidence and the source_runs ledger. Then you MUST call write_research_synthesis with a NON-EMPTY "
-        f"executive_answer that directly answers the brief, plus themes (each backed by real cited quotes with "
-        f"URLs where you have them), tensions, sentiment, recommendations, confidence, and limitations."
+        f"evidence, the computed metrics, the verification notes, and the source_runs ledger. Then call "
+        f"write_research_synthesis to author a CONSULTANT-GRADE, RESULTS-FIRST answer:",
+        "• LEAD WITH THE ANSWER AND THE NUMBERS. executive_answer directly answers the brief and puts the key "
+        "computed figures in it (with n). point_of_view states a sharp thesis — take a position, and disagree "
+        "with the brief's framing if the evidence warrants.",
+        "• metrics_tables: paste the compute_metric/compute_rate tables (with n) — never hand-type figures. "
+        "method: state how the numbers were made (metric, query shapes, window, min sample, any cross-check).",
+        "• themes: each backed by real quoted evidence with URLs and by numbers where you have them; cite by [n] "
+        "into numbered_sources. recommendations: what we'd do.",
+        "• If a source was blocked, ROUTE AROUND IT with a proxy/other angle and give it ONE line — keep "
+        "limitations to a short closing caveat, never the headline. Never fabricate.",
     ]
     if state.named_platforms:
         parts.append(
-            f"The user explicitly named these platforms: {', '.join(state.named_platforms)} — structure the answer "
-            f"to account for each one honestly (what you got, what you couldn't and why, per the ledger)."
+            f"The user explicitly named: {', '.join(state.named_platforms)} — account for each, but lead with the "
+            f"answer, not with what you couldn't get."
         )
     if state.gaps:
-        parts.append(f"A prior review found these gaps to address: {'; '.join(state.gaps)}.")
+        parts.append(f"A prior review flagged: {'; '.join(state.gaps)} — address these.")
     parts.append(
-        "Even if the evidence is thin, synthesize what you HAVE and state the limits honestly — do NOT finish "
-        "this step without calling write_research_synthesis with a real executive_answer."
+        "Even if evidence is thin, synthesize what you HAVE with a real executive_answer and a point_of_view — do "
+        "NOT finish this step without calling write_research_synthesis."
     )
     if final:
-        parts.append("This is the FINAL synthesis attempt; author it now from whatever evidence exists.")
+        parts.append("This is the FINAL synthesis; author it now from all evidence, metrics, and verification.")
     parts.append("Do NOT export.")
     return " ".join(parts)
 
@@ -186,14 +218,16 @@ GetDossier = Callable[[int], dict[str, Any]]
 Emit = Callable[[dict[str, Any]], None]
 
 # Per-node inactivity timeout (seconds). A stalled node fails alone; the run continues.
-TIMEOUTS = {"plan": 120, "discover": 120, "collect": 200, "synthesize": 300, "export": 90}
+TIMEOUTS = {"plan": 120, "discover": 120, "collect": 200, "quantify": 180,
+            "synthesize": 300, "verify": 200, "export": 90}
 
 
 async def run_graph(brief: str, emit: Emit, run_node: RunNode, get_dossier: GetDossier) -> None:
     state = ResearchState(brief=brief, named_platforms=detect_platforms(brief))
     planned = default_lanes(state)
     emit({"type": "graph_init", "named_platforms": state.named_platforms,
-          "nodes": ["plan", "discover", *[f"collect:{l}" for l in planned], "synthesize", "review", "export"]})
+          "nodes": ["plan", "discover", *[f"collect:{l}" for l in planned],
+                    "quantify", "synthesize", "review", "verify", "export"]})
 
     plan = await run_node("plan", plan_prompt(brief), TIMEOUTS["plan"])
     state.job_id = plan.get("job_id")
@@ -211,6 +245,9 @@ async def run_graph(brief: str, emit: Emit, run_node: RunNode, get_dossier: GetD
         emit({"type": "note", "text": f"Round {state.round}: collecting from {', '.join(lanes)}."})
         await asyncio.gather(*[run_node(f"collect:{lane}", collect_prompt(lane, state), TIMEOUTS["collect"]) for lane in lanes])
 
+        # QUANTIFY: turn the collected data into real numbers before we write the answer.
+        await run_node("quantify", quantify_prompt(state), TIMEOUTS["quantify"])
+
         await run_node("synthesize", synth_prompt(state), TIMEOUTS["synthesize"])
 
         emit({"type": "node", "id": "review", "state": "running"})
@@ -222,11 +259,13 @@ async def run_graph(brief: str, emit: Emit, run_node: RunNode, get_dossier: GetD
             break
         emit({"type": "note", "text": f"Review found gaps — looping to collect more: {'; '.join(gaps)}"})
 
-    # Guarantee a synthesis exists before export — otherwise export_research_report has nothing
-    # to write and the run ends with no report. If the loop never produced one, force a final pass.
-    if not _has_synthesis(get_dossier(state.job_id)):
-        emit({"type": "note", "text": "No synthesis yet — forcing a final write-up from the evidence gathered."})
-        await run_node("synthesize", synth_prompt(state, final=True), TIMEOUTS["synthesize"])
+    # VERIFY: steelman the answer once it's backed — cross-check a key number / hunt disconfirming
+    # evidence — then author the FINAL results-first synthesis incorporating what verify found.
+    if _has_synthesis(get_dossier(state.job_id)):
+        await run_node("verify", verify_prompt(state), TIMEOUTS["verify"])
+
+    emit({"type": "note", "text": "Authoring the final results-first write-up."})
+    await run_node("synthesize", synth_prompt(state, final=True), TIMEOUTS["synthesize"])
 
     if not _has_synthesis(get_dossier(state.job_id)):
         emit({"type": "error", "message": (

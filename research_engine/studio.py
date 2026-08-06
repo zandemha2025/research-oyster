@@ -21,9 +21,14 @@ on 8765.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import os
 import secrets
+import subprocess
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +48,11 @@ from settings import Settings
 ROOT = Path(__file__).resolve().parent.parent
 MCP_PYTHON = ROOT / ".venv" / "bin" / "python"
 STUDIO_PORT = 8770
+# One shared MCP server (streamable-HTTP) for the whole Studio process — every graph node and
+# conversation reuses it instead of spawning its own stdio subprocess. localhost is in NO_PROXY.
+MCP_HTTP_HOST = "127.0.0.1"
+MCP_HTTP_PORT = int(os.environ.get("OYSTER_MCP_HTTP_PORT", "8771"))
+MCP_HTTP_URL = f"http://{MCP_HTTP_HOST}:{MCP_HTTP_PORT}/mcp"
 TOKEN = secrets.token_urlsafe(24)
 
 # The research persona. Mirrors the MCP server's own instructions (kept in sync by
@@ -155,16 +165,74 @@ async def _allow_research_tools(tool_name: str, tool_input: dict[str, Any], cont
     )
 
 
+# --- Shared MCP server (the node-speed fix) --------------------------------------------------
+# A full graph run drives ~14 focused agent nodes. If each one spawned its own stdio MCP server,
+# every node would pay the Python-import + DB-connect startup (seconds each) — that's what made
+# runs multi-minute. Instead we launch ONE long-lived streamable-HTTP MCP server for the whole
+# Studio process and every node's ClaudeSDKClient connects to it over HTTP. The two mcp versions
+# stay isolated because the server runs in .venv (mcp 2.0) as a separate process; the SDK only
+# speaks the HTTP wire protocol to it.
+_mcp_proc: subprocess.Popen | None = None
+
+
+def _mcp_alive() -> bool:
+    return _mcp_proc is not None and _mcp_proc.poll() is None
+
+
+def _mcp_responding(timeout: float = 1.0) -> bool:
+    # Any HTTP response (even 4xx for a bare GET) means the server is up and listening.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        opener.open(MCP_HTTP_URL, timeout=timeout)
+        return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False
+
+
+def ensure_mcp_server() -> None:
+    """Start the shared MCP server once and wait until it answers. Idempotent."""
+    global _mcp_proc
+    if _mcp_alive():
+        return
+    env = {**os.environ, "OYSTER_MCP_HTTP_PORT": str(MCP_HTTP_PORT), "OYSTER_MCP_HTTP_HOST": MCP_HTTP_HOST}
+    _mcp_proc = subprocess.Popen(
+        [str(MCP_PYTHON), "-m", "research_engine.mcp_server"],
+        cwd=str(ROOT), env=env,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    atexit.register(_stop_mcp_server)
+    deadline = time.time() + 40
+    while time.time() < deadline:
+        if _mcp_proc.poll() is not None:
+            raise RuntimeError(f"MCP server exited during startup (code {_mcp_proc.returncode})")
+        if _mcp_responding():
+            return
+        time.sleep(0.3)
+    raise RuntimeError("MCP server did not become ready within 40s")
+
+
+def _stop_mcp_server() -> None:
+    global _mcp_proc
+    if _mcp_proc and _mcp_proc.poll() is None:
+        _mcp_proc.terminate()
+        try:
+            _mcp_proc.wait(timeout=5)
+        except Exception:
+            _mcp_proc.kill()
+    _mcp_proc = None
+
+
 def _agent_options(resume: str | None, system_prompt: str = SYSTEM_PROMPT) -> csdk.ClaudeAgentOptions:
+    ensure_mcp_server()
     return csdk.ClaudeAgentOptions(
         cwd=str(ROOT),
         system_prompt=system_prompt,
         mcp_servers={
             "research-oyster": {
-                "type": "stdio",
-                "command": str(MCP_PYTHON),
-                "args": ["-m", "research_engine.mcp_server"],
-                "env": {**os.environ},  # MCP server needs DATABASE_URL et al.
+                "type": "http",
+                "url": MCP_HTTP_URL,  # one shared server; see ensure_mcp_server above
             }
         },
         can_use_tool=_allow_research_tools,

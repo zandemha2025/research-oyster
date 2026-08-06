@@ -73,10 +73,15 @@ class GraphRunTests(unittest.TestCase):
 
         self.assertEqual(calls.count("plan"), 1)
         self.assertEqual(calls.count("discover"), 1)
-        self.assertEqual(calls.count("synthesize"), 2)   # looped once
+        # 2 in-loop synthesize (round 1 needs_more, round 2 pass) + 1 final results-first pass
+        self.assertEqual(calls.count("synthesize"), 3)
+        self.assertEqual(calls.count("quantify"), 2)     # one per collect round
+        self.assertEqual(calls.count("verify"), 1)       # steelman once, after synthesis exists
         self.assertEqual(calls.count("export"), 1)       # exported after review passed
         self.assertGreaterEqual(sum(1 for c in calls if c.startswith("collect:")), 2)
         self.assertTrue(any(e.get("type") == "graph_init" for e in events))
+        # verify runs before the final synthesize (so its cross-check lands in the authored answer)
+        self.assertLess(calls.index("verify"), len(calls) - 1 - calls[::-1].index("synthesize"))
 
     def test_run_graph_aborts_if_plan_makes_no_job(self):
         async def run_node(node_id, instruction, timeout):

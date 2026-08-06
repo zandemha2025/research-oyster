@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any
 
@@ -313,31 +314,48 @@ def connector_status() -> dict[str, Any]:
 def write_research_synthesis(
     job_id: int,
     executive_answer: str,
+    point_of_view: str = "",
     themes: list[dict[str, Any]] | None = None,
+    metrics_tables: list[dict[str, Any]] | None = None,
+    method: str = "",
     tensions: str = "",
     sentiment: str = "",
     recommendations: list[str] | None = None,
     confidence: str = "",
     limitations: str = "",
+    numbered_sources: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Author the report that answers the question, and persist it as the job's deliverable.
 
-    This is how a research job produces a real answer instead of a data dump. Call it once
-    you can actually answer the brief from the evidence you gathered.
+    Write like a consultant, not a data collector: LEAD WITH THE ANSWER AND THE NUMBERS, take a
+    position, and demote what you couldn't get to one short closing paragraph. Call this once you
+    can answer the brief from the evidence — thin evidence still gets a synthesis, with the limits
+    stated honestly.
 
-    - executive_answer: 2-5 sentences that directly answer the brief. Required.
-    - themes: list of {"title", "insight", "citations": [{"quote", "url", "source"}]} — the
-      key findings, each backed by real quoted evidence with its URL. Quote what people
-      actually said; do not paraphrase headlines.
+    - executive_answer: 2-5 sentences that directly answer the brief, with the key computed
+      numbers in them (e.g. "share rate 1.0%, n=22"). Required.
+    - point_of_view: the headline POSITION — a sharp, decision-ready thesis that may disagree with
+      the brief's framing. This is what separates a consultant report from a summary. One or two
+      sentences. State it even when it pushes back on what was asked.
+    - themes: list of {"title", "insight", "citations": [{"quote", "url", "source"}]} — the key
+      findings, each backed by real quoted evidence with its URL and by numbers where you have them.
+      Cite computed figures by [n] into numbered_sources. Quote what people actually said.
+    - metrics_tables: the computed numbers, structured. Each: {"title", "unit" (e.g. "%"/"views"),
+      "group_by", "rows": [{"group", "median", "n", ...}], "note"}. Build these from compute_metric /
+      compute_rate output — never hand-type figures. Every table must carry sample sizes (n).
+    - method: how the numbers were made — the metric chosen, query shapes, window, min sample, and
+      any triangulation/verify cross-check you ran. This is what makes the numbers trustworthy.
     - tensions: where opinion splits or evidence disagrees.
     - sentiment: the overall mood and how it breaks down.
-    - recommendations: concrete, decision-ready next actions.
+    - recommendations: concrete, decision-ready next actions ("what we'd do").
     - confidence: one honest paragraph on how confident you are and why.
-    - limitations: ONE short paragraph on what constrained the research. Distinguish
-      HONESTLY, using the get_research_dossier source_runs ledger: sources you never ran
-      or cannot run are "not available"; sources that RAN and returned nothing usable
-      (empty, HTTP 403/429, error) are "attempted, returned no usable data" — never call
-      a failed attempt "not available". Never a menu of setup instructions, never the headline.
+    - limitations: ONE short closing paragraph on what constrained the research — a caveat, never
+      the headline. Distinguish HONESTLY using the source_runs ledger: sources never run are "not
+      available"; sources that RAN and returned nothing usable are "attempted, returned no usable
+      data". When a source was blocked, say in one line what proxy/angle you used instead.
+    - numbered_sources: the [n] citation ledger — list of {"n", "label", "tool", "url",
+      "pulled_at", "note"} that every [n] in the report resolves to. Build from the source_runs
+      ledger and list_raw_responses.
 
     export_research_report will refuse to run until this exists.
     """
@@ -345,12 +363,16 @@ def write_research_synthesis(
         raise ValueError("executive_answer is required — the report must answer the question.")
     synthesis = {
         "executive_answer": executive_answer.strip(),
+        "point_of_view": point_of_view.strip(),
         "themes": themes or [],
+        "metrics_tables": metrics_tables or [],
+        "method": method.strip(),
         "tensions": tensions.strip(),
         "sentiment": sentiment.strip(),
         "recommendations": recommendations or [],
         "confidence": confidence.strip(),
         "limitations": limitations.strip(),
+        "numbered_sources": numbered_sources or [],
     }
     return store.save_synthesis(job_id, synthesis)
 
@@ -424,7 +446,16 @@ def main() -> None:
     with connect(settings.database_url) as conn:
         migrate(conn)
         seed_config(conn)
-    mcp.run(transport="stdio")
+    # Normally stdio (one server per agent client). When OYSTER_MCP_HTTP_PORT is set, run a
+    # single long-lived streamable-HTTP server instead, so the Studio can share ONE MCP process
+    # across every graph node (no per-node Python-import + DB-connect startup). See studio.py.
+    port = os.environ.get("OYSTER_MCP_HTTP_PORT")
+    if port:
+        mcp.run(transport="streamable-http",
+                host=os.environ.get("OYSTER_MCP_HTTP_HOST", "127.0.0.1"),
+                port=int(port))
+    else:
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
