@@ -260,6 +260,61 @@ async def run_apify_actor(store: ResearchStore, job_id: int, token: str, actor_i
     return {"actor_id": actor_id, "received": len(rows), "stored": len(stored), "items": stored, "raw_response_id": raw_id}
 
 
+async def apify_collect(store: ResearchStore, job_id: int, apify_token: str, platform: str,
+                        intent: str = "", query: str = "", limit: int = 30, days: int = 90,
+                        platform_token: str = "") -> dict[str, Any]:
+    """Curated, numbers-aware Apify collection: pick the right actor for (platform, intent), run it,
+    enforce the date window locally, extract normalized metrics, and store rich evidence. This is the
+    'never a no' path — with the key set, a named platform returns real data + numbers."""
+    from research_engine import apify as engine
+
+    if not apify_token:
+        return not_configured("apify")
+    spec = engine.resolve(platform, intent)
+    if spec is None:
+        return {"error": f"No curated Apify actor for {platform}/{intent or 'default'}.",
+                "supported": sorted({p for p, _ in engine.REGISTRY})}
+    if spec.opt_in and not platform_token:
+        return {"opt_in_required": True, "platform": platform, "note": spec.note or
+                "This source is opt-in and needs an extra token; using landscape/other sources instead."}
+
+    actor_input = engine.build_input(spec, query, limit, days)
+    if platform_token:  # e.g. Discord burner user token injected into the actor input
+        actor_input = {**actor_input, "token": platform_token}
+    actor = spec.actor.replace("/", "~")
+    clamped = engine.clamp_limit(limit)
+    url = f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
+    async with httpx.AsyncClient(timeout=300, headers={"Authorization": f"Bearer {apify_token}", "User-Agent": _UA}) as client:
+        response = await client.post(url, params={"clean": "true", "limit": clamped}, json=actor_input)
+        raw_id = record_raw(store.database_url, job_id, f"research.apify.{platform}", "apify_dataset", response)
+        response.raise_for_status()
+        rows = response.json()
+
+    stored, kept = [], 0
+    for raw in rows[:clamped]:
+        row = raw if isinstance(raw, dict) else {"value": raw}
+        if not engine.within_window(row, days):
+            continue
+        kept += 1
+        norm = engine.normalize_row(row, query_shape=query)
+        target = str(row.get("url") or row.get("link") or row.get("postUrl") or row.get("webVideoUrl")
+                     or row.get("tweetUrl") or f"apify://{spec.actor}")
+        title = str(row.get("title") or row.get("name") or norm["entity"] or spec.kind)
+        excerpt = str(row.get("text") or row.get("caption") or row.get("body") or row.get("description")
+                      or row.get("content") or row.get("title") or "")[:4000]
+        res = store.add_evidence(job_id, source_type=platform.lower(), url=target, title=title, excerpt=excerpt,
+                                 author=norm["entity"], query=query,
+                                 metadata={"actor": spec.actor, "record": row, "metrics": norm["metrics"],
+                                           "entity": norm["entity"], "query_shape": query, "raw_response_id": raw_id})
+        stored.append({"entity": norm["entity"], "metrics": norm["metrics"], "evidence_id": res["evidence_id"]})
+
+    metrics_present = sorted({m for s in stored for m in s["metrics"]})
+    return {"platform": platform, "intent": intent or engine.DEFAULT_INTENT.get(platform.lower()),
+            "actor": spec.actor, "received": len(rows), "kept_in_window": kept, "stored": len(stored),
+            "sample_n": len(stored), "metrics_present": metrics_present, "items": stored[:20],
+            "raw_response_id": raw_id}
+
+
 async def search_twitch(store: ResearchStore, job_id: int, client_id: str, client_secret: str,
                         query: str, limit: int = 40) -> dict[str, Any]:
     if not client_id or not client_secret:

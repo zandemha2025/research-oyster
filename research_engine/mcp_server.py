@@ -11,6 +11,7 @@ from research_engine.connectors import search_x as search_x_connector
 from research_engine.connectors import inspect_discord_invite as inspect_discord_connector
 from research_engine.connectors import read_discord_channel as read_discord_connector
 from research_engine.connectors import run_apify_actor as run_apify_connector
+from research_engine.connectors import apify_collect as apify_collect_connector
 from research_engine.connectors import search_kick as search_kick_connector
 from research_engine.connectors import search_twitch as search_twitch_connector
 from research_engine.connectors import read_twitch_chat as read_twitch_chat_connector
@@ -166,6 +167,23 @@ async def run_apify_actor(job_id: int, actor_id: str, actor_input: dict[str, Any
     """Run any chosen Apify Actor and store its dataset items as evidence."""
     return await _tracked(f"apify:{source_type}", job_id, actor_id,
                           run_apify_connector(store, job_id, settings.apify_token, actor_id, actor_input, source_type, limit))
+
+
+@mcp.tool()
+async def apify_collect(job_id: int, platform: str, query: str, intent: str = "",
+                        limit: int = 30, days: int = 90) -> dict[str, Any]:
+    """Collect real DATA + NUMBERS from a platform via the curated Apify engine — the preferred way
+    to get Reddit, X, TikTok, Instagram, YouTube, Twitch, or Kick data. It picks the RIGHT actor for
+    the platform (no guessing), enforces the date window, and extracts normalized metrics
+    (views/likes/comments/shares/followers) into each evidence row's metadata so you can compute
+    medians/rates with compute_metric. Requires APIFY_TOKEN (Settings ⚙). `platform` e.g. 'tiktok',
+    'reddit', 'x', 'instagram', 'youtube', 'twitch', 'kick'; `intent` optional (e.g. 'hashtag',
+    'profile'). Discord messages are opt-in and need a separate token — use inspect_discord_invite
+    for community-landscape signal by default."""
+    platform_token = settings.discord_research_token if platform.lower() == "discord" else ""
+    return await _tracked(f"apify:{platform}", job_id, query,
+                          apify_collect_connector(store, job_id, settings.apify_token, platform,
+                                                  intent, query, limit, days, platform_token=platform_token))
 
 
 @mcp.tool()

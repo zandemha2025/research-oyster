@@ -27,8 +27,8 @@ MAX_ROUNDS = 2
 # Platforms a user might name, and which collection lane serves each.
 KNOWN_PLATFORMS = ["discord", "twitch", "tiktok", "instagram", "reddit", "kick", "youtube", "twitter"]
 LANE_FOR = {
-    "discord": "discord", "twitch": "twitch", "reddit": "reddit",
-    "kick": "web", "tiktok": "web", "instagram": "web", "youtube": "web", "twitter": "web",
+    "discord": "discord", "twitch": "twitch", "reddit": "reddit", "kick": "kick",
+    "tiktok": "web", "instagram": "web", "youtube": "web", "twitter": "web",
 }
 # A named platform's collection lands under this source_runs connector prefix (for the review gate).
 CONNECTOR_KEY = {"twitch": "twitch", "discord": "discord", "reddit": "reddit"}
@@ -120,25 +120,29 @@ def collect_prompt(lane: str, state: ResearchState) -> str:
     j, brief = state.job_id, state.brief
     prompts = {
         "reddit": (
-            f'COLLECT step (Reddit) for job {j}. Find and read REAL Reddit discussion about "{brief}" '
-            f"using search_reddit and fetch_reddit_thread; if Reddit's API is blocked (403), crawl "
-            f"old.reddit.com threads with crawl_web_page. Store real user quotes via add_evidence. Do not synthesize."
+            f'COLLECT step (Reddit) for job {j}. PREFER apify_collect(platform="reddit", query="…") — it '
+            f'returns posts/comments WITH numbers (score, comments) and avoids the anon 403. Also use '
+            f'search_reddit/fetch_reddit_thread for deep threads. Capture real quotes about "{brief}". Do not synthesize.'
         ),
         "twitch": (
-            f'COLLECT step (Twitch) for job {j}. Twitch chat is LIVE and per-channel via read_twitch_chat '
-            f'(no credentials needed). Identify any channel likely discussing "{brief}" right now and read '
-            f"its chat; if nothing relevant is live, record that plainly. Store anything real via add_evidence. Do not synthesize."
+            f'COLLECT step (Twitch) for job {j}. Use apify_collect(platform="twitch", query="…") for channel/'
+            f'clip stats WITH numbers (views, followers, viewers); and read_twitch_chat for any channel live on '
+            f'"{brief}" right now (no creds). Store real data via add_evidence. Do not synthesize.'
+        ),
+        "kick": (
+            f'COLLECT step (Kick) for job {j}. Use apify_collect(platform="kick", query="…") for channel/clip '
+            f'stats WITH numbers (followers, viewer counts, categories) about "{brief}". Store via add_evidence. Do not synthesize.'
         ),
         "discord": (
-            f'COLLECT step (Discord) for job {j}. Use inspect_discord_invite to capture public metadata for '
-            f'the most relevant community about "{brief}". read_discord_channel only works if the Oyster bot '
-            f"is already in that server — if it isn't, state that plainly as an access limit. Store what you get "
-            f"via add_evidence. Do not synthesize."
+            f'COLLECT step (Discord) for job {j}. Default to inspect_discord_invite for community-LANDSCAPE signal '
+            f'(member/online counts) on the most relevant servers about "{brief}" — this always works. Full message '
+            f"reading is opt-in only; do not attempt it unless enabled. Store what you get via add_evidence. Do not synthesize."
         ),
         "web": (
-            f'COLLECT step (Web) for job {j}. Use search_web to find the most relevant public pages/articles '
-            f'about "{brief}", then crawl_web_page the best few and store real quotes/claims via add_evidence. '
-            f"Do not synthesize."
+            f'COLLECT step (Web) for job {j}. Use search_web to find the most relevant public pages/articles about '
+            f'"{brief}", then crawl_web_page the best few; for social platforms prefer apify_collect '
+            f'(platform="tiktok"/"instagram"/"x"/"youtube") to get posts WITH numbers. Store real quotes/claims '
+            f"via add_evidence. Do not synthesize."
         ),
     }
     return prompts.get(lane, prompts["web"])
