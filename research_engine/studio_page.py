@@ -66,11 +66,24 @@ PAGE = r'''<!doctype html>
 .gnode.skipped{opacity:.45}
 .gnode .gdetail{color:var(--muted);font-size:11px;margin-left:auto;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gnode.gsub{margin-left:20px}
+.kbtn{font:inherit;font-size:12px;font-weight:600;border:1px solid var(--line);background:var(--wash);border-radius:7px;padding:5px 10px;cursor:pointer;margin-top:10px}
+.kmodal{display:none;position:fixed;inset:0;z-index:60;background:#0008;padding:24px;overflow:auto}
+.kmodal.show{display:block}
+.kdialog{max-width:640px;margin:5vh auto;background:#fff;border-radius:16px;padding:26px}
+.kdialog h2{margin:0 0 6px;font:700 20px Georgia,serif}
+.kfield{margin:12px 0}.kfield label{display:block;font-weight:600;font-size:13px;margin-bottom:3px}
+.kfield small{color:var(--muted);font-weight:400;display:block;margin-bottom:5px}
+.kfield input{width:100%;font:inherit;padding:9px 11px;border:1px solid #bfc5c1;border-radius:9px}
+.krow{display:flex;gap:10px;justify-content:flex-end;margin-top:18px}
+.krow button{font:inherit;font-weight:650;border:0;border-radius:9px;padding:9px 16px;cursor:pointer}
+.krow .save{background:var(--accent);color:#fff}.krow .cancel{background:#e8ece9}
+.kok{color:var(--green);font-size:11px;font-weight:700}.kno{color:var(--muted);font-size:11px}
 </style></head><body>
 <div class="app">
   <div class="col side">
     <h1>Studio</h1><div class="sub" id="authpill">Research Oyster</div>
-    <button class="newbtn" onclick="newConversation()">+ New research</button>
+    <button class="kbtn" onclick="openKeys()">⚙ API keys</button>
+    <button class="newbtn" onclick="newConversation()" style="margin-top:10px">+ New research</button>
     <div id="convos"></div>
     <div class="sechead">Reports</div>
     <div id="reportsList"><div class="empty" style="padding:6px 0;text-align:left">No reports yet.</div></div>
@@ -97,6 +110,11 @@ PAGE = r'''<!doctype html>
   </div>
 </div>
 <div class="docview" id="docView"><div class="docbar"><button onclick="closeDoc()">← Back</button><b id="docTitle">Report</b></div><iframe id="docFrame"></iframe></div>
+<div class="kmodal" id="keysModal"><div class="kdialog"><h2>API keys</h2>
+<p class="muted" style="font-size:13px;margin:0 0 4px">Stored locally in <code>.env</code>. Blank = keep what's saved. <b>Apify is the data engine</b> — set it first; it unlocks real data + numbers from Reddit, X, TikTok, IG, YouTube, Twitch and Kick.</p>
+<div id="keysFields"></div>
+<div class="krow"><button class="cancel" onclick="closeKeys()">Cancel</button><button class="save" onclick="saveKeys()">Save keys</button></div>
+</div></div>
 <script>
 const token='__TOKEN__';
 let active=null, es=null, curAssistant=null, curThinking=null;
@@ -106,6 +124,9 @@ async function api(path,body){const opt=body?{method:'POST',headers:{'Content-Ty
 function el(t,c,txt){const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e}
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':String(s);return d.innerHTML}
 
+async function openKeys(){const s=await api('/api/settings');const box=document.getElementById('keysFields');box.innerHTML='';for(const k of Object.keys(s.labels)){const set=s.configured[k];const f=el('div','kfield');f.innerHTML=`<label>${k} ${set?'<span class="kok">✓ saved</span>':'<span class="kno">not set</span>'}</label><small>${esc(s.labels[k])}</small><input id="k_${k}" type="password" autocomplete="off" placeholder="${set?'saved — leave blank to keep':'paste to set'}">`;box.appendChild(f)}document.getElementById('keysModal').classList.add('show')}
+function closeKeys(){document.getElementById('keysModal').classList.remove('show')}
+async function saveKeys(){const vals={};document.querySelectorAll('#keysFields input').forEach(inp=>{const v=inp.value.trim();if(v)vals[inp.id.slice(2)]=v});try{await api('/api/settings',vals);closeKeys()}catch(e){alert(e.message)}}
 async function boot(){try{const h=await api('/api/health');document.getElementById('authpill').innerHTML=`auth: <span class="pill ${h.auth==='ambient'?'ok':'ok'}">${h.auth}</span> · db: <span class="pill ${h.db?'ok':''}">${h.db?'ok':'down'}</span>`}catch(e){}await refreshConvos();loadReports()}
 async function loadReports(){try{const jobs=await api('/api/jobs');const box=document.getElementById('reportsList');const done=(jobs||[]).filter(j=>j.status==='synthesized');if(!done.length){box.innerHTML='<div class="empty" style="padding:6px 0;text-align:left">No reports yet.</div>';return}box.innerHTML='';done.forEach(j=>{const d=el('div','report-item');d.innerHTML=`${esc((j.brief||'Untitled').slice(0,44))}<small>#${j.id} · ${(j.created_at||'').slice(0,10)}</small>`;d.onclick=()=>openReportDoc(j.id,j.brief);box.appendChild(d)})}catch(e){}}
 function openReportDoc(id,title){document.getElementById('docTitle').textContent=title?String(title).slice(0,90):'Report — job #'+id;document.getElementById('docFrame').src='/api/report/'+id+'?_='+Date.now();document.getElementById('docView').classList.add('show')}

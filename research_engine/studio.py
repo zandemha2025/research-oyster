@@ -92,6 +92,60 @@ def _db_ok() -> bool:
         return False
 
 
+# --- Settings / API keys (persisted to .env; the MCP server reads them via Settings()) -----
+# Label per key shown in the panel. Order = display order; APIFY_TOKEN leads (the data engine).
+SETTINGS_KEYS: dict[str, str] = {
+    "APIFY_TOKEN": "Apify token — the universal data engine (Reddit, X, TikTok, IG, YouTube, Twitch, Kick)",
+    "WEB_READER_API_KEY": "Web reader key — URL→markdown for JS-heavy pages (optional)",
+    "X_BEARER_TOKEN": "X / Twitter API bearer token (optional)",
+    "TWITCH_CLIENT_ID": "Twitch app Client ID (Helix API)",
+    "TWITCH_CLIENT_SECRET": "Twitch app Client Secret (Helix API)",
+    "KICK_CLIENT_ID": "Kick Client ID (optional)",
+    "KICK_CLIENT_SECRET": "Kick Client Secret (optional)",
+    "DISCORD_BOT_TOKEN": "Discord bot token — only servers where the bot is installed",
+    "DISCORD_RESEARCH_TOKEN": "OPT-IN burner Discord user token — ToS-gray, off unless you enable it",
+    "TAVILY_API_KEY": "Tavily web-search key (optional)",
+    "BRAVE_API_KEY": "Brave web-search key (optional)",
+    "SERPER_API_KEY": "Serper web-search key (optional)",
+}
+
+
+def _dotenv_path() -> Path:
+    return ROOT / ".env"
+
+
+def _read_dotenv() -> dict[str, str]:
+    out: dict[str, str] = {}
+    path = _dotenv_path()
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if sep:
+                out[key.strip()] = value
+    return out
+
+
+def _save_settings(values: dict[str, Any]) -> None:
+    """Persist allow-listed keys to .env. Never blanks a saved secret (empty = keep existing);
+    preserves all other lines (DATABASE_URL, CLAUDE_CODE_OAUTH_TOKEN). 0600."""
+    env = _read_dotenv()
+    for key in SETTINGS_KEYS:
+        if key not in values:
+            continue
+        val = str(values.get(key, "")).replace("\n", "").replace("\r", "").strip()
+        if val:  # blank means "keep what's saved"
+            env[key] = val
+    tmp = _dotenv_path().with_suffix(".tmp")
+    tmp.write_text("\n".join(f"{k}={v}" for k, v in env.items()) + "\n", encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    tmp.replace(_dotenv_path())
+
+
+def _public_settings() -> dict[str, Any]:
+    env = _read_dotenv()
+    return {"labels": SETTINGS_KEYS, "configured": {k: bool(env.get(k)) for k in SETTINGS_KEYS}}
+
+
 async def _allow_research_tools(tool_name: str, tool_input: dict[str, Any], context: Any):
     """Auto-approve Oyster's research tools + safe read-only builtins; deny the rest."""
     if tool_name.startswith("mcp__research-oyster__") or tool_name in ALLOWED_BUILTINS:
@@ -421,6 +475,18 @@ async def jobs(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
 
+async def get_settings(request: Request) -> JSONResponse:
+    return JSONResponse(_public_settings())
+
+
+async def post_settings(request: Request) -> JSONResponse:
+    if not _require_token(request):
+        return JSONResponse({"error": "expired session; refresh"}, status_code=403)
+    body = await request.json()
+    _save_settings(body if isinstance(body, dict) else {})
+    return JSONResponse({"ok": True, **_public_settings()})
+
+
 routes = [
     Route("/", index),
     Route("/api/health", health),
@@ -431,6 +497,8 @@ routes = [
     Route("/api/report/{job_id:int}", report, methods=["GET"]),
     Route("/api/dossier/{job_id:int}", dossier, methods=["GET"]),
     Route("/api/jobs", jobs, methods=["GET"]),
+    Route("/api/settings", get_settings, methods=["GET"]),
+    Route("/api/settings", post_settings, methods=["POST"]),
 ]
 
 app = Starlette(routes=routes)

@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     brave_api_key: str = ""
     serper_api_key: str = ""
+    # Server-side URL->markdown reader for JS-heavy public pages (no browser needed).
+    web_reader_api_key: str = ""
+    # OPT-IN ONLY: a burner Discord user token for reading public channels of open servers.
+    # Off unless the user supplies it and opts in per run. ToS-gray — see docs.
+    discord_research_token: str = ""
     collection_hour_utc: int = Field(default=16, ge=0, le=23)
     http_timeout_seconds: float = Field(default=20.0, gt=0)
     max_retries: int = Field(default=4, ge=0)
