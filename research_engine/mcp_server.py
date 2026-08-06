@@ -21,6 +21,7 @@ from research_engine.connectors import discover_sources as discover_sources_conn
 from research_engine.connectors import search_reddit as search_reddit_connector
 from research_engine.connectors import fetch_reddit_thread as fetch_reddit_thread_connector
 from research_engine.connectors import CONNECTOR_GUIDES, READY_CHECKS
+from research_engine import metrics as metrics_engine
 from research_engine.planner import build_plan
 from research_engine.capture import CaptureStore
 from research_engine.export import export_job
@@ -268,6 +269,29 @@ def get_research_dossier(job_id: int) -> dict[str, Any]:
     not_configured). Reconcile your synthesis's limitations against source_runs: a run that
     is 'empty' or 'error' was attempted and failed, and must not be reported as 'not available'."""
     return store.dossier(job_id)
+
+
+@mcp.tool()
+def list_metric_fields(job_id: int) -> dict[str, Any]:
+    """List the numeric fields you can compute over for this job (views, likes, followers, score, …)
+    plus the grouping options (entity / query_shape / source_type). Call before compute_metric."""
+    return metrics_engine.list_metric_fields(store.dossier(job_id)["evidence"])
+
+
+@mcp.tool()
+def compute_metric(job_id: int, value_field: str, group_by: str = "entity", min_sample: int = 1) -> dict[str, Any]:
+    """Compute REAL numbers over collected evidence: median/mean/min/max and the sample size n of a
+    numeric field (e.g. views, followers), grouped by entity / query_shape / source_type. This is how
+    you cite figures with sample sizes instead of eyeballing quotes. See list_metric_fields first."""
+    return metrics_engine.compute_metric(store.dossier(job_id)["evidence"], value_field, group_by, min_sample)
+
+
+@mcp.tool()
+def compute_rate(job_id: int, numerator: str, denominator: str, group_by: str = "entity",
+                 min_sample: int = 1) -> dict[str, Any]:
+    """Compute a RATE — numerator/denominator per item (e.g. shares/views = share rate) — as a median
+    percentage per group and overall, with sample sizes. The kind of metric a consultant report leads with."""
+    return metrics_engine.compute_rate(store.dossier(job_id)["evidence"], numerator, denominator, group_by, min_sample)
 
 
 @mcp.tool()
