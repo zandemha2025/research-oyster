@@ -398,15 +398,59 @@ async def read_discord_channel(store: ResearchStore, job_id: int, bot_token: str
     return {"channel_id": channel_id, "received": len(rows), "stored": len(stored), "items": stored, "raw_response_id": raw_id}
 
 
-async def crawl_web_page(store: ResearchStore, job_id: int, url: str, query: str = "") -> dict[str, Any]:
-    """Fetch a public page over httpx and normalize its readable text and links.
+async def _reader_fetch(url: str, key: str) -> tuple[str, int]:
+    """Server-side URL→markdown via a reader service (Jina Reader). Renders JS on the reader's
+    servers, so JS-heavy pages come back as clean text with NO browser open. Best-effort."""
+    headers = {"User-Agent": _UA, "X-Return-Format": "markdown"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    async with httpx.AsyncClient(timeout=45, trust_env=True, follow_redirects=True) as client:
+        response = await client.get(f"https://r.jina.ai/{url}", headers=headers)
+    return (response.text or ""), response.status_code
 
-    We fetch with httpx (which honors HTTPS_PROXY + the trusted CA bundle, so it works
-    behind an agent/corporate egress proxy) and parse the HTML with Scrapling's Selector
-    for the same CSS extraction. A curl-based fetcher that bypasses the proxy fails with a
-    TLS/connection-reset error in proxied environments, which is why we do not use it here.
-    """
+
+def _md_title(md: str) -> str:
+    for line in md.splitlines()[:6]:
+        if line.lower().startswith("title:"):
+            return line.split(":", 1)[1].strip()
+    match = re.search(r"^#\s+(.+)$", md, re.M)
+    return match.group(1).strip() if match else ""
+
+
+def _md_links(md: str) -> list[str]:
+    out: list[str] = []
+    for link in re.findall(r"\]\((https?://[^)\s]+)\)", md):
+        if link not in out:
+            out.append(link)
+    return out
+
+
+async def crawl_web_page(store: ResearchStore, job_id: int, url: str, query: str = "",
+                         reader_key: str = "") -> dict[str, Any]:
+    """Read a public page. When a web-reader key is set, use a server-side URL→markdown reader
+    (renders JS, no browser open needed) — this fixes JS-heavy pages that otherwise return
+    boilerplate. Otherwise fall back to httpx + Scrapling (proxy/CA-aware)."""
     _validate_public_url(url)
+
+    # 1. Preferred when keyed: server-side reader (handles JS-heavy pages).
+    if reader_key:
+        try:
+            md, status = await _reader_fetch(url, reader_key)
+        except Exception:
+            md, status = "", 0
+        if md and status < 400 and len(md.strip()) >= 200:
+            raw_id = record_raw_parts(store.database_url, job_id, "research.web", "web_reader",
+                                      method="GET", url=url, status=status, content=md.encode("utf-8", "replace"))
+            title = _md_title(md) or url
+            excerpt = md.strip()[:12000]
+            links = _md_links(md)[:100]
+            result = store.add_evidence(job_id, source_type="web", url=url, title=title, excerpt=excerpt,
+                                        query=query, metadata={"status": status, "discovered_links": links,
+                                                               "raw_response_id": raw_id, "via": "reader"})
+            return {**result, "url": url, "title": title, "text": excerpt, "discovered_links": links,
+                    "raw_response_id": raw_id, "via": "reader"}
+
+    # 2. Fallback: httpx + Scrapling (honors HTTPS_PROXY + CA bundle).
     from scrapling import Selector
 
     async with httpx.AsyncClient(timeout=30, follow_redirects=True, trust_env=True,
@@ -417,8 +461,7 @@ async def crawl_web_page(store: ResearchStore, job_id: int, url: str, query: str
     raw_id = record_raw_parts(
         store.database_url, job_id, "research.web", "web_page",
         method="GET", url=final_url, status=response.status_code,
-        response_headers=dict(response.headers),
-        content=response.content,
+        response_headers=dict(response.headers), content=response.content,
     )
     if response.status_code >= 400:
         raise ValueError(f"The page returned HTTP {response.status_code}.")
@@ -427,7 +470,7 @@ async def crawl_web_page(store: ResearchStore, job_id: int, url: str, query: str
     chunks = [str(text).strip() for text in selector.css("body *::text").getall()]
     excerpt = " ".join(chunk for chunk in chunks if chunk)[:12000]
     if not excerpt:
-        raise ValueError("The page did not contain extractable text. Try an Apify Actor or authorized browser route.")
+        raise ValueError("The page did not contain extractable text. Try an Apify Actor or the web reader (add a key).")
     links = []
     for href in selector.css("a::attr(href)").getall():
         absolute = urljoin(final_url, str(href))
@@ -436,8 +479,10 @@ async def crawl_web_page(store: ResearchStore, job_id: int, url: str, query: str
         if len(links) >= 100:
             break
     result = store.add_evidence(job_id, source_type="web", url=final_url, title=title, excerpt=excerpt,
-                                query=query, metadata={"status": response.status_code, "discovered_links": links, "raw_response_id": raw_id})
-    return {**result, "url": final_url, "title": title, "text": excerpt, "discovered_links": links, "raw_response_id": raw_id}
+                                query=query, metadata={"status": response.status_code, "discovered_links": links,
+                                                       "raw_response_id": raw_id, "via": "httpx"})
+    return {**result, "url": final_url, "title": title, "text": excerpt, "discovered_links": links,
+            "raw_response_id": raw_id, "via": "httpx"}
 
 
 # ---------------------------------------------------------------------------

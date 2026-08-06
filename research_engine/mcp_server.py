@@ -221,8 +221,10 @@ async def read_discord_channel(job_id: int, channel_id: str, limit: int = 50) ->
 
 @mcp.tool()
 async def crawl_web_page(job_id: int, url: str, query: str = "") -> dict[str, Any]:
-    """Collect readable text and links from a public webpage with the self-hosted adaptive crawler."""
-    return await _tracked("web_crawl", job_id, url, crawl_web_connector(store, job_id, url, query))
+    """Collect readable text and links from a public webpage. Uses a server-side URL→markdown
+    reader for JS-heavy pages when a web-reader key is set (no browser needed), else httpx+Scrapling."""
+    return await _tracked("web_crawl", job_id, url,
+                          crawl_web_connector(store, job_id, url, query, reader_key=settings.web_reader_api_key))
 
 
 @mcp.tool()
