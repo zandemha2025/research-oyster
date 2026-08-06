@@ -44,8 +44,12 @@ PAGE = r'''<!doctype html>
 .evt pre{margin:0;white-space:pre-wrap;word-break:break-word;font:11.5px/1.45 ui-monospace,Menlo,Consolas,monospace;max-height:280px;overflow:auto}
 .muted{color:var(--muted)}
 .reportwrap{height:100%;display:flex;flex-direction:column}
-.reportwrap select{margin:12px 14px;font:inherit;padding:7px;border:1px solid var(--line);border-radius:8px}
+.reportwrap select{margin:12px 14px 6px;font:inherit;padding:7px;border:1px solid var(--line);border-radius:8px}
 .reportwrap iframe{flex:1;border:0;width:100%;background:#fff}
+.downloads{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 14px 10px}
+.downloads .dlabel{font-size:12px;color:var(--muted);margin-right:2px}
+.downloads .chip{font-size:12px;text-decoration:none;color:var(--ink);background:var(--panel,#f4f2ec);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+.downloads .chip:hover{border-color:var(--accent,#c2410c);color:var(--accent,#c2410c)}
 .empty{color:var(--muted);padding:40px 16px;text-align:center;font-size:13px}
 .pill{font-size:11px;border-radius:20px;padding:2px 9px;background:var(--wash);color:var(--muted)}
 .pill.ok{background:#e7f3ec;color:var(--green)}
@@ -105,6 +109,7 @@ PAGE = r'''<!doctype html>
     <div class="graph" id="graphView"><div class="empty">The research pipeline appears here as a graph when a run starts.</div></div>
     <div class="reportwrap" id="reportPane" style="display:none">
       <select id="reportSelect" onchange="loadReport(this.value)"><option value="">No report yet</option></select>
+      <div id="reportDownloads" class="downloads"></div>
       <iframe id="reportFrame"></iframe>
     </div>
   </div>
@@ -188,7 +193,12 @@ function rebuildReportSelect(select){const c=convs[active];const sel=document.ge
   c.job_ids.forEach(j=>{const o=el('option',null,'Report — job #'+j);o.value=j;sel.appendChild(o)});
   const pick=select||c.job_ids[c.job_ids.length-1];sel.value=pick;loadReport(pick);
 }
-function loadReport(j){if(j)document.getElementById('reportFrame').src='/api/report/'+j+'?_='+Date.now()}
+function loadReport(j){if(j){document.getElementById('reportFrame').src='/api/report/'+j+'?_='+Date.now();loadDownloads(j)}}
+async function loadDownloads(j){const box=document.getElementById('reportDownloads');box.innerHTML='';
+  try{const r=await fetch('/api/report/'+j+'/files');if(!r.ok)return;const files=(await r.json()).files||[];
+    if(!files.length)return;const lbl=el('span','dlabel','Download:');box.appendChild(lbl);
+    files.forEach(f=>{const a=document.createElement('a');a.className='chip';a.href='/api/report/'+j+'/file/'+encodeURIComponent(f.name);a.textContent=f.label||f.name;a.setAttribute('download','');box.appendChild(a)});
+  }catch(e){}}
 
 function showTab(which){document.getElementById('tabFeed').classList.toggle('active',which==='feed');document.getElementById('tabGraph').classList.toggle('active',which==='graph');document.getElementById('tabReport').classList.toggle('active',which==='report');document.getElementById('feed').style.display=which==='feed'?'block':'none';document.getElementById('graphView').style.display=which==='graph'?'block':'none';document.getElementById('reportPane').style.display=which==='report'?'flex':'none'}
 

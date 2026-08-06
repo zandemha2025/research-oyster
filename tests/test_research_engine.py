@@ -335,7 +335,13 @@ class ExportTests(unittest.TestCase):
             result = export_job(store, job_id, Path(directory))
             folder = Path(result["folder"])
             names = {Path(f).name for f in result["files"]}
-            self.assertEqual({"report.md", "report.html", "evidence.json", "evidence.csv", "raw_responses.jsonl"}, names)
+            # The core report files are always present...
+            self.assertLessEqual({"report.md", "report.html", "evidence.json", "evidence.csv",
+                                  "raw_responses.jsonl"}, names)
+            # ...alongside the polished deliverable package (no metrics here, so no charts).
+            self.assertLessEqual({"report.docx", "deck.pptx", "Sources-and-Citations.md",
+                                  "README-start-here.md"}, names)
+            self.assertEqual(result["warnings"], [])
             md = folder.joinpath("report.md").read_text()
             # The report LEADS with the executive answer, before any evidence.
             self.assertLess(md.index("## Executive answer"), md.index("## Appendix"))

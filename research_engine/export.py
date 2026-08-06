@@ -1,12 +1,22 @@
-"""Write a research job's authored report and raw evidence to a folder under output/.
+"""Write a research job's authored report + a polished deliverable package to output/.
 
-The deliverable is the report that ANSWERS the question — the model-authored synthesis
-(executive answer, themes with cited quotes, tensions, sentiment, recommendations,
-confidence & limits). Evidence is demoted to an appendix. Produces five files per job so
-the work leaves chat and becomes shareable files: report.md and report.html (the readable
-report), evidence.json and evidence.csv (the raw evidence rows), and raw_responses.jsonl
-(the redacted network payloads captured during collection).
+The deliverable is the report that ANSWERS the question — the results-first, model-authored
+synthesis (point of view, executive answer with numbers, the metrics tables, themes with cited
+quotes, method, recommendations, confidence & a short limitations caveat, and the numbered [n]
+ledger). Evidence is demoted to an appendix.
 
+Produces, per job:
+  - report.md / report.html — the readable report
+  - report.docx — the same report as a shareable Word document (source of truth)
+  - deck.pptx — a slide deck led by the point of view and the numbers
+  - charts/ — the key metrics as PNG+SVG bar charts, with the CSVs behind them
+  - Sources-and-Citations.md — the numbered [n] ledger (tool + pull date + url per source)
+  - README-start-here.md — orientation for the package
+  - raw-data/ — the raw pulls split per connector, plus evidence.json
+  - evidence.json / evidence.csv / raw_responses.jsonl — the raw evidence + network payloads
+
+The core report is written first; the polished package builders are best-effort (a builder that
+fails, e.g. a missing optional dep, is recorded as a warning and skipped — the report still ships).
 Export refuses to run without a synthesis: a data dump is not a report.
 """
 from __future__ import annotations
@@ -134,10 +144,101 @@ def export_job(store: ResearchStore, job_id: int, output_dir: Path | str = Path(
             handle.write(json.dumps(row, default=str) + "\n")
 
     files = [report_md, report_html, evidence_json, evidence_csv, raw_jsonl]
+
+    # --- Consultant-grade package: charts, deck, docx, numbered ledger, README, raw-data -----
+    # Each builder is best-effort: a failure in one (e.g. a missing optional dep) must not sink
+    # the export — the core report above is already written. We collect what succeeds.
+    package = _build_package(folder, job, synthesis, evidence, raw_rows,
+                             dossier.get("source_runs", []))
+    files.extend(package["files"])
+
     return {
         "job_id": job_id,
         "folder": str(folder),
         "files": [str(path) for path in files],
         "evidence_count": len(evidence),
         "raw_count": len(raw_rows),
+        "package": [Path(p).name for p in package["files"]],
+        "warnings": package["warnings"],
     }
+
+
+def _build_package(folder: Path, job: dict[str, Any], synthesis: dict[str, Any],
+                   evidence: list[dict[str, Any]], raw_rows: list[dict[str, Any]],
+                   source_runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Emit the polished deliverables alongside the core report. Never raises — returns the files
+    that were produced plus a list of warnings for anything that couldn't be built."""
+    from reporting import package as pkg
+
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    produced: list[Path] = []
+    warnings: list[str] = []
+
+    # Charts (also needed by the deck + docx), from the computed metrics tables.
+    charts: list[dict[str, Any]] = []
+    metrics_tables = (synthesis or {}).get("metrics_tables") or []
+    if metrics_tables:
+        try:
+            from reporting import charts as charts_mod
+
+            charts = charts_mod.build_charts(metrics_tables, folder / "charts")
+            for ch in charts:
+                for key in ("png", "csv"):
+                    p = ch.get(key)
+                    if p and Path(p).exists():
+                        produced.append(Path(p))
+                        if key == "png":
+                            svg = Path(p).with_suffix(".svg")
+                            if svg.exists():
+                                produced.append(svg)
+            if any(ch.get("png") for ch in charts):
+                produced.append(folder / "charts")  # so the README/Studio can link the folder
+        except Exception as exc:  # pragma: no cover - depends on optional deps
+            warnings.append(f"charts: {type(exc).__name__}: {exc}")
+
+    # Written report (.docx)
+    try:
+        from reporting import docx_report
+
+        produced.append(docx_report.build_docx(job, synthesis, generated_at, charts, folder / "report.docx"))
+    except Exception as exc:  # pragma: no cover
+        warnings.append(f"report.docx: {type(exc).__name__}: {exc}")
+
+    # Slide deck (.pptx)
+    try:
+        from reporting import deck as deck_mod
+
+        produced.append(deck_mod.build_deck(job, synthesis, generated_at, charts, folder / "deck.pptx"))
+    except Exception as exc:  # pragma: no cover
+        warnings.append(f"deck.pptx: {type(exc).__name__}: {exc}")
+
+    # Numbered [n] ledger
+    sources = pkg.build_numbered_sources(synthesis, source_runs, raw_rows)
+    ledger = folder / "Sources-and-Citations.md"
+    pkg.write_sources_ledger(sources, job, ledger)
+    produced.append(ledger)
+
+    # raw-data/ split per connector
+    try:
+        pkg.write_raw_data(raw_rows, evidence, folder / "raw-data")
+        produced.append(folder / "raw-data")
+    except Exception as exc:  # pragma: no cover
+        warnings.append(f"raw-data: {type(exc).__name__}: {exc}")
+
+    # README orientation — written last so it can describe what actually got produced.
+    produced_names = {p.name for p in produced}
+    candidates: list[tuple[str, str]] = [
+        ("report.docx", "the full written report (source of truth)"),
+        ("report.html", "the same report for the browser"),
+        ("deck.pptx", "slide deck led by the point of view and the numbers"),
+        ("charts", "the key metrics as PNG+SVG charts, with the CSVs behind them"),
+        ("Sources-and-Citations.md", "the numbered [n] ledger — trace any citation to its pull"),
+        ("raw-data", "the raw pulls per connector, plus evidence.json"),
+        ("evidence.csv", "the captured evidence rows as a spreadsheet"),
+    ]
+    manifest = [(n, d) for n, d in candidates if n in produced_names or n in ("report.html", "evidence.csv")]
+    readme = folder / "README-start-here.md"
+    pkg.write_readme(job, synthesis, manifest, readme)
+    produced.insert(0, readme)
+
+    return {"files": produced, "warnings": warnings}

@@ -527,6 +527,59 @@ async def report(request: Request) -> HTMLResponse:
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
+# Deliverable files the report pane offers for download, in the order shown. Anything not present
+# for a given job is simply skipped. Names are matched against the job's export folder.
+_DOWNLOADABLE: list[tuple[str, str]] = [
+    ("report.docx", "Report (Word)"),
+    ("deck.pptx", "Deck (PPTX)"),
+    ("report.html", "Report (HTML)"),
+    ("Sources-and-Citations.md", "Sources [n]"),
+    ("README-start-here.md", "README"),
+    ("evidence.csv", "Evidence (CSV)"),
+]
+
+
+def _job_folder(job_id: int) -> Path:
+    store = ResearchStore(Settings().database_url)
+    return job_folder(store, job_id, Settings().output_dir)
+
+
+async def report_files(request: Request) -> JSONResponse:
+    """List the deliverable files available for a job (for the report pane's download chips)."""
+    job_id = int(request.path_params["job_id"])
+    try:
+        folder = _job_folder(job_id)
+    except Exception as exc:
+        return JSONResponse({"files": [], "error": str(exc)}, status_code=404)
+    files = [{"name": name, "label": label}
+             for name, label in _DOWNLOADABLE if (folder / name).exists()]
+    if (folder / "charts").is_dir():
+        files.append({"name": "charts", "label": "Charts (folder)"})
+    return JSONResponse({"files": files})
+
+
+async def report_file(request: Request) -> Any:
+    """Serve one deliverable file for download. Name is validated against the allow-list so the
+    endpoint can never traverse outside the job's export folder."""
+    from starlette.responses import FileResponse
+
+    job_id = int(request.path_params["job_id"])
+    name = request.path_params["name"]
+    allowed = {n for n, _ in _DOWNLOADABLE} | {"charts"}
+    if name not in allowed:
+        return PlainTextResponse("not a downloadable file", status_code=404)
+    try:
+        folder = _job_folder(job_id)
+    except Exception:
+        return PlainTextResponse("no such job", status_code=404)
+    target = folder / name
+    if name == "charts" or target.is_dir():
+        return PlainTextResponse("open the export folder to browse charts/", status_code=400)
+    if not target.exists():
+        return PlainTextResponse("file not found", status_code=404)
+    return FileResponse(str(target), filename=name)
+
+
 async def dossier(request: Request) -> JSONResponse:
     job_id = int(request.path_params["job_id"])
     try:
@@ -563,6 +616,8 @@ routes = [
     Route("/api/chat/send", send_message, methods=["POST"]),
     Route("/api/chat/stream", stream, methods=["GET"]),
     Route("/api/report/{job_id:int}", report, methods=["GET"]),
+    Route("/api/report/{job_id:int}/files", report_files, methods=["GET"]),
+    Route("/api/report/{job_id:int}/file/{name}", report_file, methods=["GET"]),
     Route("/api/dossier/{job_id:int}", dossier, methods=["GET"]),
     Route("/api/jobs", jobs, methods=["GET"]),
     Route("/api/settings", get_settings, methods=["GET"]),

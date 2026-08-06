@@ -379,7 +379,9 @@ def write_research_synthesis(
 
 @mcp.tool()
 def export_research_report(job_id: int) -> dict[str, Any]:
-    """Write report.md, report.html, evidence.json, evidence.csv, and raw_responses.jsonl for a job into output/."""
+    """Write the full deliverable package for a job into output/: report.md/.html/.docx, deck.pptx,
+    charts/ (PNG+SVG+CSV of the metrics), Sources-and-Citations.md (the numbered [n] ledger),
+    README-start-here.md, raw-data/, and evidence.json/.csv. Refuses until a synthesis exists."""
     return export_job(store, job_id, settings.output_dir)
 
 
