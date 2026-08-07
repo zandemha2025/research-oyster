@@ -532,14 +532,30 @@ async def report(request: Request) -> HTMLResponse:
     if not html_path.exists():
         try:
             export_job(store, job_id, Settings().output_dir)
-        except Exception as exc:
-            return HTMLResponse(
-                f"<p style='font-family:sans-serif;padding:2rem'>No report yet for job "
-                f"#{job_id}. The agent must call write_research_synthesis first.<br>"
-                f"<small>{exc}</small></p>",
-                status_code=409,
-            )
+        except Exception:
+            # The report isn't ready yet (the run is still working, or it finished without a
+            # synthesis). Show the human a calm placeholder — never a tool name or a stack trace.
+            # 200, not an error code, so an open Report tab doesn't log a console error mid-run;
+            # loadReport re-fetches with a cache-buster and swaps in the real report the moment
+            # it lands.
+            return HTMLResponse(_report_pending_page(), status_code=200)
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+def _report_pending_page() -> str:
+    """A quiet, on-brand 'your report is on its way' page shown while a run is still working."""
+    return (
+        "<!doctype html><meta charset='utf-8'>"
+        "<div style=\"font-family:-apple-system,Segoe UI,Roboto,sans-serif;height:100vh;"
+        "display:flex;align-items:center;justify-content:center;background:#0f1420;color:#e6e9ef\">"
+        "<div style='text-align:center;max-width:34rem;padding:2rem'>"
+        "<div style='font-size:2.5rem;margin-bottom:.5rem'>🦪</div>"
+        "<h2 style='font-weight:600;margin:0 0 .5rem'>Your report is being prepared</h2>"
+        "<p style='color:#9aa3b2;line-height:1.5;margin:0'>The research is still running. "
+        "This page updates on its own — your report will appear here the moment it's ready. "
+        "Watch the Activity and Graph tabs to follow along.</p>"
+        "</div></div>"
+    )
 
 
 # Deliverable files the report pane offers for download, in the order shown. Anything not present

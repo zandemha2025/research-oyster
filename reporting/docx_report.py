@@ -118,7 +118,7 @@ def build_docx(job: dict[str, Any], synthesis: dict[str, Any], generated_at: str
 
     themes = themes if themes is not None else (synthesis.get("themes") or [])
     if themes:
-        _heading(doc, "What players are saying", level=1)
+        _heading(doc, "What people are saying", level=1)
         for th in themes:
             _heading(doc, th.get("title") or "Theme", level=2)
             if th.get("insight"):

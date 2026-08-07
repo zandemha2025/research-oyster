@@ -113,7 +113,7 @@ def build_html(title: str, synthesis: dict[str, Any], themes: list[dict[str, Any
                               f'<cite>— {_esc(src)}{_cite_sup(c)}</cite></blockquote>')
             insight = f'<p>{_esc(th.get("insight"))}</p>' if th.get("insight") else ""
             tblocks.append(f'<div class="theme"><h3>{_esc(th.get("title") or "Theme")}</h3>{insight}{cites}</div>')
-        parts.append(f'<section><h2>What players are saying</h2>{"".join(tblocks)}</section>')
+        parts.append(f'<section><h2>What people are saying</h2>{"".join(tblocks)}</section>')
 
     if s.get("tensions"):
         parts.append(f'<section><h2>Where it splits</h2><p>{_esc(s["tensions"])}</p></section>')
