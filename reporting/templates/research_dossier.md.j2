@@ -61,9 +61,9 @@ None recorded.
 
 | Field | Value |
 |---|---|
-| Decision | {{ job.decision or "—" | cell }} |
-| Market | {{ job.market or "—" | cell }} |
-| Time horizon | {{ job.time_horizon or "—" | cell }} |
+| Decision | {{ (job.decision or "—") | cell }} |
+| Market | {{ (job.market or "—") | cell }} |
+| Time horizon | {{ (job.time_horizon or "—") | cell }} |
 | Status | {{ job.status | cell }} |
 | Created | {{ job.created_at | cell }} |
 

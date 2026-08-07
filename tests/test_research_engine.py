@@ -89,7 +89,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
              "discord_landscape", "discord_widget",
              "run_apify_actor", "apify_collect", "search_twitch", "read_twitch_chat", "search_kick", "read_kick_chat", "read_discord_channel",
              "crawl_web_page", "search_web", "discover_sources", "search_reddit", "fetch_reddit_thread",
-             "get_research_dossier", "list_research_jobs", "connector_status",
+             "get_research_dossier", "search_evidence", "list_research_jobs", "connector_status",
              "list_metric_fields", "compute_metric", "compute_rate", "analyze_chatter",
              "write_research_synthesis", "export_research_report",
              "get_browser_capture_mission",

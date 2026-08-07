@@ -35,7 +35,7 @@ def _redacted_url(url: str) -> str:
     if not parsed.query:
         return url
     pairs = [
-        (key, "[REDACTED]" if SECRET_KEYS.match(key) else value)
+        (key, "[REDACTED]" if SECRET_KEYS.search(key) else value)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True)
     ]
     return urlunparse(parsed._replace(query=urlencode(pairs)))

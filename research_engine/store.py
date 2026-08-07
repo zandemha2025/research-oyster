@@ -116,6 +116,30 @@ class ResearchStore:
             rows = cur.fetchall()
         return [{key: (value.isoformat() if hasattr(value, "isoformat") else value) for key, value in row.items()} for row in rows]
 
+    def search_evidence(self, job_id: int, query: str, limit: int = 25) -> list[dict[str, Any]]:
+        """Keyword search over a job's collected evidence (quote text, title, or author). Lets the
+        agent pull the specific rows that mention a term instead of re-reading the whole dossier —
+        the read path the corpus was missing."""
+        like = f"%{(query or '').strip()}%"
+        with connect(self.database_url) as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, source_type, url, title, excerpt, author, metadata, collected_at
+                   FROM research_evidence
+                   WHERE job_id=%s AND (excerpt ILIKE %s OR title ILIKE %s OR author ILIKE %s)
+                   ORDER BY collected_at DESC LIMIT %s""",
+                (job_id, like, like, like, max(1, min(limit, 100))),
+            )
+            rows = cur.fetchall()
+        out = []
+        for r in rows:
+            meta = r.get("metadata") or {}
+            out.append({"id": r["id"], "source_type": r["source_type"], "url": r["url"],
+                        "title": r["title"], "author": r["author"],
+                        "excerpt": (r["excerpt"] or "")[:400],
+                        "metrics": meta.get("metrics") if isinstance(meta, dict) else None,
+                        "entity": meta.get("entity") if isinstance(meta, dict) else None})
+        return out
+
     def list_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
         with connect(self.database_url) as conn, conn.cursor() as cur:
             cur.execute("SELECT id,brief,decision,status,created_at,updated_at FROM research_jobs ORDER BY updated_at DESC LIMIT %s", (limit,))

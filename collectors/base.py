@@ -16,15 +16,20 @@ from db.queries import connect, insert_raw_response, json_value
 PARSER_VERSION = "1"
 _raw_context: ContextVar[tuple[Any, int, str] | None] = ContextVar("raw_context", default=None)
 _collection_mode: ContextVar[str] = ContextVar("collection_mode", default="scheduled")
-_SECRET_KEYS = re.compile(r"^(authorization|cookie|set-cookie|client_secret|token|access_token|refresh_token|api[_-]?key)$", re.I)
+# Match anywhere in the key (via .search) so prefixed headers like x-api-key and Client-Id are
+# caught, not just exact matches. Over-redaction of a stray token/secret-ish key is acceptable —
+# leaking a credential in an exported raw log is not.
+_SECRET_KEYS = re.compile(
+    r"(authorization|cookie|client[_-]?secret|client[_-]?id|access[_-]?token|refresh[_-]?token"
+    r"|api[_-]?key|bearer|secret|token)", re.I)
 
 
 def _redacted_headers(headers: Any) -> dict[str, str]:
-    return {str(k): ("[REDACTED]" if _SECRET_KEYS.match(str(k)) else str(v)) for k, v in headers.items()}
+    return {str(k): ("[REDACTED]" if _SECRET_KEYS.search(str(k)) else str(v)) for k, v in headers.items()}
 
 
 def _redacted_url(url: httpx.URL) -> str:
-    pairs = [(k, "[REDACTED]" if _SECRET_KEYS.match(k) else v) for k, v in url.params.multi_items()]
+    pairs = [(k, "[REDACTED]" if _SECRET_KEYS.search(k) else v) for k, v in url.params.multi_items()]
     return str(url.copy_with(query=str(httpx.QueryParams(pairs)).encode("ascii")))
 
 
@@ -56,7 +61,7 @@ def _safe_response_content(kind: str, content: bytes) -> bytes:
 
     def scrub(item: Any) -> Any:
         if isinstance(item, dict):
-            return {key: ("[REDACTED]" if _SECRET_KEYS.match(str(key)) else scrub(child)) for key, child in item.items()}
+            return {key: ("[REDACTED]" if _SECRET_KEYS.search(str(key)) else scrub(child)) for key, child in item.items()}
         if isinstance(item, list):
             return [scrub(child) for child in item]
         return item

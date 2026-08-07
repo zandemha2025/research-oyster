@@ -404,6 +404,15 @@ def analyze_chatter(job_id: int, group_by: str = "source_type") -> dict[str, Any
 
 
 @mcp.tool()
+def search_evidence(job_id: int, query: str, limit: int = 25) -> list[dict[str, Any]]:
+    """Search this job's collected evidence for a keyword or phrase — matches the quote text, title,
+    or author — and return the matching rows (with any numbers on them). Use this to pull the
+    specific evidence behind a claim when quantifying, verifying, or answering a focused follow-up,
+    instead of re-reading the whole dossier."""
+    return store.search_evidence(job_id, query, limit)
+
+
+@mcp.tool()
 def list_research_jobs(limit: int = 20) -> list[dict[str, Any]]:
     """List recent assignments so an agent can resume prior work."""
     return store.list_jobs(max(1, min(limit, 100)))

@@ -167,9 +167,11 @@ async def fetch_rss(store: ResearchStore, job_id: int, feed_url: str, query_term
     _validate_public_url(feed_url)
     async with httpx.AsyncClient(timeout=30, follow_redirects=True, headers={"User-Agent": "ResearchOyster/0.1"}) as client:
         response = await client.get(feed_url)
-        raw_id = record_raw(store.database_url, job_id, "research.rss", "rss_feed", response)
         response.raise_for_status()
+    # Validate the FINAL url (after any redirects) BEFORE persisting the body — otherwise a public
+    # feed that 302s to an internal address would get its response written to raw_responses first.
     _validate_public_url(str(response.url))
+    raw_id = record_raw(store.database_url, job_id, "research.rss", "rss_feed", response)
     parsed = feedparser.parse(response.content)
     terms = [term.lower() for term in query_terms if term.strip()]
     stored = []
@@ -690,7 +692,7 @@ async def read_discord_channel(store: ResearchStore, job_id: int, bot_token: str
         content = str(row.get("content") or "").strip()
         if not content: continue
         author = row.get("author") or {}; url = f"https://discord.com/channels/{guild_id or '@me'}/{channel_id}/{row['id']}"
-        result = store.add_evidence(job_id, source_type="discord_message", url=url, title=f"Discord message by {author.get('username', 'unknown')}",
+        result = store.add_evidence(job_id, source_type="discord", url=url, title=f"Discord message by {author.get('username', 'unknown')}",
                                     excerpt=content[:4000], author=author.get("username", ""),
                                     published_at=datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")) if row.get("timestamp") else None,
                                     metadata={"channel_id": channel_id, "message_id": row["id"]})
