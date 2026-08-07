@@ -521,7 +521,13 @@ async def stream(request: Request) -> EventSourceResponse:
 async def report(request: Request) -> HTMLResponse:
     job_id = int(request.path_params["job_id"])
     store = ResearchStore(Settings().database_url)
-    folder = job_folder(store, job_id, Settings().output_dir)
+    try:
+        folder = job_folder(store, job_id, Settings().output_dir)  # raises if the job doesn't exist
+    except Exception:
+        return HTMLResponse(
+            f"<p style='font-family:sans-serif;padding:2rem'>No research job #{job_id} was found.</p>",
+            status_code=404,
+        )
     html_path = folder / "report.html"
     if not html_path.exists():
         try:
@@ -582,9 +588,24 @@ async def report_file(request: Request) -> Any:
     except Exception:
         return PlainTextResponse("no such job", status_code=404)
     target = folder / name
-    if name == "charts" or target.is_dir():
-        return PlainTextResponse("open the export folder to browse charts/", status_code=400)
-    if not target.exists():
+    # The "charts" chip downloads the whole charts/ folder as a zip (a click should give the human
+    # something, not a 400). Everything else is a single allow-listed file.
+    if name == "charts":
+        import io
+        import zipfile
+        from starlette.responses import Response
+
+        charts_dir = folder / "charts"
+        if not charts_dir.is_dir():
+            return PlainTextResponse("no charts for this report", status_code=404)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in sorted(charts_dir.iterdir()):
+                if f.is_file():
+                    zf.write(str(f), arcname=f"charts/{f.name}")
+        return Response(buf.getvalue(), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="charts-{job_id}.zip"'})
+    if target.is_dir() or not target.exists():
         return PlainTextResponse("file not found", status_code=404)
     return FileResponse(str(target), filename=name)
 
@@ -645,6 +666,20 @@ def main() -> None:
     import webbrowser
 
     import uvicorn
+
+    import socket
+
+    # Fail fast with a friendly message if the port is taken, instead of an uvicorn stack trace.
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        probe.bind(("127.0.0.1", STUDIO_PORT))
+        probe.close()
+    except OSError:
+        probe.close()
+        print(f"\n  Research Oyster Studio can't start: port {STUDIO_PORT} is already in use.\n"
+              f"  It's probably already running — open http://127.0.0.1:{STUDIO_PORT}/ in your browser.\n"
+              f"  (To stop the old one: pkill -f research_engine.studio, then run ./studio again.)\n")
+        raise SystemExit(1)
 
     url = f"http://127.0.0.1:{STUDIO_PORT}/"
     print(f"Research Oyster Studio is open at {url}")

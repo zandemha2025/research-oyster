@@ -3,6 +3,10 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | bash
 #
+# To install a specific branch (e.g. the current Studio build before it's merged to main), set
+# OYSTER_BRANCH — this is what docs/STUDIO.md instructs for the Studio:
+#   curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | OYSTER_BRANCH=claude/demo-prep-p0iazw bash
+#
 # Downloads Oyster, installs Python + PostgreSQL if they are missing, creates and migrates a
 # local database, and attaches Oyster to Claude Code / Codex. Safe to re-run: it updates in
 # place and never overwrites an existing .env or database.

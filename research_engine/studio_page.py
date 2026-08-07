@@ -2,7 +2,9 @@
 
 PAGE = r'''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Research Oyster Studio</title><style>
+<title>Research Oyster Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231a1f2b'/%3E%3Ctext x='50%25' y='54%25' font-size='38' text-anchor='middle' dominant-baseline='middle'%3E%F0%9F%A6%AA%3C/text%3E%3C/svg%3E">
+<style>
 :root{--ink:#18211d;--muted:#66716b;--paper:#f6f4ee;--card:#fff;--green:#26734d;--red:#a53b32;--line:#dedfd9;--accent:#173f35;--wash:#eef2f0}
 *{box-sizing:border-box}html,body{height:100%}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .app{display:grid;grid-template-columns:220px 1fr 380px;height:100vh}
@@ -194,11 +196,12 @@ function rebuildReportSelect(select){const c=convs[active];const sel=document.ge
   const pick=select||c.job_ids[c.job_ids.length-1];sel.value=pick;loadReport(pick);
 }
 function loadReport(j){if(j){document.getElementById('reportFrame').src='/api/report/'+j+'?_='+Date.now();loadDownloads(j)}}
-async function loadDownloads(j){const box=document.getElementById('reportDownloads');box.innerHTML='';
-  try{const r=await fetch('/api/report/'+j+'/files');if(!r.ok)return;const files=(await r.json()).files||[];
+async function loadDownloads(j){const box=document.getElementById('reportDownloads');
+  try{const r=await fetch('/api/report/'+j+'/files');const files=r.ok?((await r.json()).files||[]):[];
+    box.innerHTML='';  // clear AFTER the fetch so overlapping calls can't stack duplicate chips
     if(!files.length)return;const lbl=el('span','dlabel','Download:');box.appendChild(lbl);
     files.forEach(f=>{const a=document.createElement('a');a.className='chip';a.href='/api/report/'+j+'/file/'+encodeURIComponent(f.name);a.textContent=f.label||f.name;a.setAttribute('download','');box.appendChild(a)});
-  }catch(e){}}
+  }catch(e){box.innerHTML=''}}
 
 function showTab(which){document.getElementById('tabFeed').classList.toggle('active',which==='feed');document.getElementById('tabGraph').classList.toggle('active',which==='graph');document.getElementById('tabReport').classList.toggle('active',which==='report');document.getElementById('feed').style.display=which==='feed'?'block':'none';document.getElementById('graphView').style.display=which==='graph'?'block':'none';document.getElementById('reportPane').style.display=which==='report'?'flex':'none'}
 
