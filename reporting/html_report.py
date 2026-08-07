@@ -79,7 +79,7 @@ def build_html(title: str, synthesis: dict[str, Any], themes: list[dict[str, Any
     parts: list[str] = []
     parts.append(f'<div class="cover"><div class="kicker">Research Oyster</div>'
                  f'<h1>{_esc(title)}</h1><div class="meta">{_esc(generated_at)}'
-                 f' · {_esc(s.get("evidence_total") or "")} answer drawn from real player voices</div></div>')
+                 f' · drawn from real primary sources</div></div>')
 
     if s.get("point_of_view"):
         parts.append(f'<section class="pov"><div class="pov-label">Our point of view</div>'

@@ -56,7 +56,9 @@ def _report_title(brief: str) -> str:
             continue
         line = re.sub(r"(?i)^research brief\s*[—:-]\s*", "", line)
         line = re.sub(r"\s*\((?:internal|confidential)[^)]*\)", "", line, flags=re.I).strip(" —-")
-        return line[:100] or "Research report"
+        if len(line) > 72:  # cut at a word boundary, never mid-word
+            line = line[:72].rsplit(" ", 1)[0].rstrip(",;:—- ") + "…"
+        return line or "Research report"
     return "Research report"
 
 
