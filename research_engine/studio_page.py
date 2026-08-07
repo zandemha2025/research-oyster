@@ -124,7 +124,7 @@ PAGE = r'''<!doctype html>
 </div></div>
 <script>
 const token='__TOKEN__';
-let active=null, es=null, curAssistant=null, curThinking=null;
+let active=null, es=null, curAssistant=null, curThinking=null, nodeBubbles={};
 const convs={};
 
 async function api(path,body){const opt=body?{method:'POST',headers:{'Content-Type':'application/json','X-Studio-Token':token},body:JSON.stringify(body)}:{};const r=await fetch(path,opt);const d=await r.json();if(!r.ok)throw new Error(d.error||'request failed');return d}
@@ -142,7 +142,7 @@ async function refreshConvos(){const list=await api('/api/conversations');const 
 
 async function newConversation(){const d=await api('/api/conversations',{title:'New research'});convs[d.conversation_id]={id:d.conversation_id,title:d.title,job_ids:[]};await refreshConvos();openConversation(d.conversation_id)}
 
-function openConversation(cid){active=cid;curAssistant=null;
+function openConversation(cid){active=cid;curAssistant=null;nodeBubbles={};
   document.getElementById('stream').innerHTML='';
   document.getElementById('feed').innerHTML='';
   rebuildReportSelect();
@@ -167,19 +167,21 @@ function feedBox(){return document.getElementById('feed')}
 
 function onEvent(type,data){
   if(type==='ping')return;
-  if(type==='graph_init'){initGraph(data.nodes);showTab('graph');return}
+  if(type==='graph_init'){nodeBubbles={};initGraph(data.nodes);showTab('graph');return}
   if(type==='node'){setNode(data.id,data.state,data.detail);return}
   if(type==='note'){addNote(data.text);return}
-  if(type==='user'){curAssistant=null;curThinking=null;const m=el('div','msg user',data.text);streamBox().appendChild(m);scrollStream();return}
-  if(type==='text'){curThinking=null;if(!curAssistant){curAssistant=el('div','msg assistant');curAssistant.innerHTML='<b class="who">Oyster</b>';const span=el('span','body-text');curAssistant.appendChild(span);streamBox().appendChild(curAssistant)}curAssistant.querySelector('.body-text').textContent+=data.text;scrollStream();return}
-  if(type==='thinking_start'){curAssistant=null;curThinking=el('div','think');curThinking.innerHTML='<span class="lbl">thinking</span>';const s=el('span','tbody');curThinking.appendChild(s);streamBox().appendChild(curThinking);scrollStream();return}
+  if(type==='user'){nodeBubbles={};curThinking=null;const m=el('div','msg user',data.text);streamBox().appendChild(m);scrollStream();return}
+  // Each node gets its OWN bubble (keyed by data.node), so two parallel collect lanes streaming at
+  // once never interleave their tokens into one garbled block.
+  if(type==='text'){curThinking=null;const k=data.node||'_';let b=nodeBubbles[k];if(!b){b=el('div','msg assistant');b.innerHTML='<b class="who">Oyster</b>';const span=el('span','body-text');b.appendChild(span);streamBox().appendChild(b);nodeBubbles[k]=b}b.querySelector('.body-text').textContent+=data.text;scrollStream();return}
+  if(type==='thinking_start'){delete nodeBubbles[data.node||'_'];curThinking=el('div','think');curThinking.innerHTML='<span class="lbl">thinking</span>';const s=el('span','tbody');curThinking.appendChild(s);streamBox().appendChild(curThinking);scrollStream();return}
   if(type==='thinking'){curAssistant=null;if(!curThinking){curThinking=el('div','think');curThinking.innerHTML='<span class="lbl">thinking</span>';const s=el('span','tbody');curThinking.appendChild(s);streamBox().appendChild(curThinking)}curThinking.querySelector('.tbody').textContent+=data.text;scrollStream();return}
   if(type==='tool_call'){curThinking=null;addEvt('call','→',data.name,JSON.stringify(data.input,null,2));return}
   if(type==='tool_result'){addEvt('result'+(data.is_error?' err':''),data.is_error?'✕':'✓',data.name||'result',data.content);if(/export_research_report|write_research_synthesis/.test(data.name||'')){const c=convs[active];if(c&&c.job_ids&&c.job_ids.length)setTimeout(()=>rebuildReportSelect(c.job_ids[c.job_ids.length-1]),600)}return}
   if(type==='job_linked'){const c=convs[active];if(c&&!c.job_ids.includes(data.job_id)){c.job_ids.push(data.job_id);rebuildReportSelect(data.job_id)}refreshConvos();return}
-  if(type==='result'){curAssistant=null;if(data.cost_usd!=null){const f=el('div','msg muted','— turn complete · $'+Number(data.cost_usd).toFixed(4));streamBox().appendChild(f)}return}
+  if(type==='result'){delete nodeBubbles[data.node||'_'];if(data.cost_usd!=null){const f=el('div','msg muted','— turn complete · $'+Number(data.cost_usd).toFixed(4));streamBox().appendChild(f)}return}
   if(type==='error'){curAssistant=null;const m=el('div','msg err');m.innerHTML='<b class="who">error</b>'+esc(data.message);streamBox().appendChild(m);scrollStream();return}
-  if(type==='done'){document.getElementById('input').disabled=false;document.getElementById('sendbtn').disabled=false;const c=convs[active];if(c&&c.job_ids&&c.job_ids.length)rebuildReportSelect(c.job_ids[c.job_ids.length-1]);loadReports();refreshConvos();return}
+  if(type==='done'){nodeBubbles={};document.getElementById('input').disabled=false;document.getElementById('sendbtn').disabled=false;const c=convs[active];if(c&&c.job_ids&&c.job_ids.length)rebuildReportSelect(c.job_ids[c.job_ids.length-1]);loadReports();refreshConvos();return}
 }
 
 function addEvt(cls,ico,name,body){const f=feedBox();if(f.querySelector('.empty'))f.innerHTML='';

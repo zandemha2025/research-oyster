@@ -159,7 +159,16 @@ def collect_prompt(lane: str, state: ResearchState) -> str:
             f"via add_evidence. Do not synthesize."
         ),
     }
-    return prompts.get(lane, prompts["web"])
+    engagement = (
+        " ENGAGEMENT — REQUIRED: every time you add_evidence, record ALL engagement numbers visible "
+        "for that item into metadata (use metadata={'metrics': {...}} or top-level keys): upvotes/"
+        "score, likes, comments, shares/reposts/retweets, views, dislikes/ratio — whatever that "
+        "channel exposes. This is what lets the report weight by consensus, so a 1k-upvote post "
+        "outweighs an obscure one. If a platform hides a metric (e.g. Reddit has no public share "
+        "count; downvotes are hidden), just omit it — never invent a number, and never store 0 as if "
+        "it were real when the source simply didn't return it."
+    )
+    return prompts.get(lane, prompts["web"]) + engagement
 
 
 def quantify_prompt(state: ResearchState) -> str:

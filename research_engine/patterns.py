@@ -38,6 +38,10 @@ _STOP = {
     "just", "too", "very", "can", "will", "would", "should", "could", "now", "get", "got", "im",
     "dont", "u", "ur", "lol", "lmao", "lmfao", "yeah", "yep", "nah", "ok", "okay", "gg", "wp", "omg",
     "bruh", "bro", "like", "gonna", "wanna", "yall", "aint", "cant", "thats", "theyre", "youre",
+    # Page chrome + scraper artifacts (e.g. old.reddit HTML, Next.js build output) that otherwise
+    # dominate term counts when a page is crawled instead of read through a clean API.
+    "permalink", "embed", "points", "children", "static", "chunks", "div", "span", "class", "css",
+    "nbsp", "stylesheet", "javascript", "src", "href", "srcset", "svg", "png", "webp", "save", "reply",
 }
 _EMOTE_RE = re.compile(r"\[emote:\d+:[^\]]+\]")
 _URL_RE = re.compile(r"https?://\S+")
