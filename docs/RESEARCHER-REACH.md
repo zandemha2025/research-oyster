@@ -15,7 +15,9 @@ This is a methodology build. It gets its own testing pass and does **not** ship 
 
 A great researcher / data scientist doesn't stop at "not much out there." They **change technique**:
 they model the question, ladder their queries, follow every thread, reason from proxies, read the
-silence, and bring a lens. This spec turns each of those into a concrete move in the graph.
+silence, bring a lens — and they **weight what they find by how many people stand behind it** (a
+1k-upvote comment is a poll, not an anecdote). This spec turns each of those into a concrete move in
+the graph.
 
 ---
 
@@ -51,7 +53,7 @@ Two new ideas: a **question-model** step up front, and a **reach expansion** ste
 
 ---
 
-## The six moves → concrete changes
+## The seven moves → concrete changes
 
 ### 1. Model the question before mining it  *(the data-modeler move — lead build A)*
 Don't gather-then-summarize. First define what would have to be **true** to answer the decision:
@@ -119,7 +121,34 @@ the value, not the quotes.
 
 - Small `reporting/lenses.py` registry of named frameworks; the `model`/`synth` prompts may invoke
   the one that fits the decision type.
-- Lowest priority of the six — do it after 1–5 land.
+- Lowest priority — do it after the rest land.
+
+### 7. Weight by consensus — signal at scale  *(the conviction-weighting move — co-lead build)*
+The unit of evidence is not "a comment." It's **a comment × the people who endorsed it.** A
+1,000-upvote comment is a poll result (~1,000 people said "yes, this"), not an anecdote. Counting
+*threads* undervalues that completely. This is the trading-at-scale model: don't count opinions —
+weight them by conviction (engagement), and let magnitude separate signal from noise.
+
+- **Already captured** (no new data): every evidence row stores its engagement — Reddit
+  `score` + `num_comments`; Apify TikTok/IG/YT `views/likes/comments/shares`; X `public_metrics`.
+  It's in `metadata`. Today the synthesis reasons over *row counts*, not *weight behind them*.
+- **New `patterns.weighted_consensus(evidence, by="theme")`**: aggregate endorsement
+  (Σ upvotes/likes/comments/shares) per theme/claim and **rank findings by weight, not count**.
+  A single high-conviction comment can outrank twenty obscure ones — and the report should say so.
+- **Normalize for honesty** (the data-scientist calibration): raw upvotes have confounders — big
+  communities inflate everything, new posts haven't accrued votes, visibility ≠ agreement. Weight
+  by engagement but adjust for community size + post age, and report the weight **and** its caveat.
+  That's the line between "consensus at scale" and "whatever's loudest today."
+- **`synth_prompt`** leads with weighted consensus: *"the dominant complaint, by community
+  endorsement — 4,300 upvotes across 8 threads — is X"* rather than *"8 comments mention X."*
+- **Collection + reach prioritize conviction**: sort threads by score, read the top-upvoted
+  comments first (`fetch_reddit_thread` already returns scored comments; just order by them). Go
+  where the endorsement concentrates, not whatever returned first.
+- **Distinguish loud-fringe from consensus**: a few very-high-engagement signals outweigh a lot of
+  low-engagement noise — surface which is which.
+- Files: `patterns.py` (new fn + tests, pure over evidence metadata), `graph.py` (`synth_prompt`,
+  collect ordering), `reporting/html_report.py` (show the weight next to a finding), `metrics.py`
+  (engagement-weighted rollups). No new data capture — this is a reasoning layer over what we store.
 
 ---
 
@@ -130,27 +159,35 @@ the value, not the quotes.
 2. **Agent reach** (`reach.py` + loop change) — the multiplier. *Verify: on a deliberately obscure
    brief, round 2 collects entities/links harvested from round 1; the run snowballs, converges via
    `seen`, and doesn't loop forever.*
-3. **Question-model** (`model` node + `write_question_model` + gate upgrade). *Verify: the report's
+3. **Consensus weighting** (`patterns.weighted_consensus` + synth prompt + collect ordering) —
+   co-lead; the data's already there, so it's high yield for low cost. *Verify: findings rank by
+   Σ-endorsement not row count; a 1k-upvote comment outranks 20 obscure ones; normalized for
+   community size + age; unit tests over sample metadata.*
+4. **Question-model** (`model` node + `write_question_model` + gate upgrade). *Verify: the report's
    claims map to the model; the gate chases unfilled claims, not row counts.*
-4. **Proxy + silence** (`patterns.interpret_absence`, synth prompt). *Verify: a thin-topic run
+5. **Proxy + silence** (`patterns.interpret_absence`, synth prompt). *Verify: a thin-topic run
    returns a labelled proxy answer + a named "silence" verdict, not a shrug.*
-5. **Lenses** — optional polish.
+6. **Lenses** — optional polish.
 
 ## What's new code vs. touch-only
 - **New**: `research_engine/ladder.py`, `research_engine/reach.py`, `reporting/lenses.py`,
-  `patterns.interpret_absence`, a `model` node + `write_question_model` tool.
-- **Touch**: `graph.py` (model node, loop→reach, prompt upgrades), `mcp_server.py` (one tool),
-  `connectors.py` (return page hrefs), `html_report.py` (proxy tag). No DB migration (JSONB).
+  `patterns.interpret_absence`, `patterns.weighted_consensus`, a `model` node +
+  `write_question_model` tool.
+- **Touch**: `graph.py` (model node, loop→reach, consensus + prompt upgrades, collect ordering),
+  `mcp_server.py` (one tool), `connectors.py` (return page hrefs), `metrics.py` (engagement-weighted
+  rollups), `html_report.py` (proxy tag + show the weight on a finding). No DB migration (JSONB).
 
 ## Testing
-- Pure units for `ladder`, `reach.extract_leads`, `patterns.interpret_absence` (captured sample
-  evidence, no network) — mirrors `tests/test_apify.py` / `tests/test_patterns.py`.
+- Pure units for `ladder`, `reach.extract_leads`, `patterns.interpret_absence`,
+  `patterns.weighted_consensus` (captured sample evidence, no network) — mirrors
+  `tests/test_apify.py` / `tests/test_patterns.py`.
 - One **obscure-topic acceptance run** (free path only) that must: snowball via reach, converge,
-  and produce a labelled, proxy-aware, confidence-tagged answer — the whole point of the build.
+  and produce a labelled, proxy-aware, confidence-tagged, **consensus-weighted** answer.
 - Keep the suite green; the loop must still terminate (round cap + `seen` dedup).
 
 ## Success criteria
 On a deliberately obscure brief, no paid keys: the tool doesn't return "not much out there." It
 returns a modeled answer — direct where it can, proxy where it must, silence read where it should —
-and the run visibly **reached outward** (round 2+ targets came from round 1's findings). That's the
-moat: the method, not the sources.
+that **leads with what the universe actually endorses** (weighted by upvotes/likes/comments, not raw
+mention count), and the run visibly **reached outward** (round 2+ targets came from round 1's
+findings). That's the moat: the method and the weight, not the sources.
