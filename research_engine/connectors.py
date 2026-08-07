@@ -138,6 +138,38 @@ def not_configured(connector: str) -> dict[str, Any]:
     }
 
 
+def _apify_reason(status: int) -> str:
+    """Plain-English reason for a non-2xx Apify response, so the host (and the report) never sees a
+    bare HTTP code. Covers the ways a real key goes wrong mid-run: wrong/expired, out of credits,
+    rate-limited."""
+    if status in (401, 403):
+        return ("Apify rejected the token (HTTP %d) — check the key in ⚙ API keys. "
+                "Falling back to free sources." % status)
+    if status == 402:
+        return "The Apify account is out of credits (HTTP 402). Falling back to free sources."
+    if status == 429:
+        return "Apify is rate-limiting this key (HTTP 429). Falling back to free sources."
+    if status == 404:
+        return "That Apify actor was not found (HTTP 404). Falling back to free sources."
+    return "Apify returned HTTP %d. Falling back to free sources." % status
+
+
+def _apify_soft_fail(reason: str, status: int | None = None) -> dict[str, Any]:
+    """A rejected or failed Apify key must degrade exactly like a missing one — a clear reason plus
+    the same ordered fallbacks the host already knows to follow — never a raw HTTP exception that
+    stops the run. This is what keeps a bad/expired/credit-exhausted key from killing a live run."""
+    guide = CONNECTOR_GUIDES.get("apify", {})
+    fallbacks = guide.get("fallbacks", [])
+    return {
+        "apify_unavailable": True,
+        "connector": "apify",
+        "error": reason,
+        "status": status,
+        "fallbacks": fallbacks,
+        "next_step": fallbacks[0] if fallbacks else "",
+    }
+
+
 def _validate_public_url(url: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -405,11 +437,15 @@ async def run_apify_actor(store: ResearchStore, job_id: int, token: str, actor_i
         raise ValueError("Choose an Apify Actor ID, such as owner/actor-name.")
     url = f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
     clamped_limit = max(1, min(limit, 1000))
-    async with httpx.AsyncClient(timeout=300, headers={"Authorization": f"Bearer {token}", "User-Agent": "ResearchOyster/0.1"}) as client:
-        response = await client.post(url, params={"clean": "true", "limit": clamped_limit}, json=actor_input)
-        raw_id = record_raw(store.database_url, job_id, "research.apify", "apify_dataset", response)
-        response.raise_for_status()
-        rows = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=300, headers={"Authorization": f"Bearer {token}", "User-Agent": "ResearchOyster/0.1"}) as client:
+            response = await client.post(url, params={"clean": "true", "limit": clamped_limit}, json=actor_input)
+            raw_id = record_raw(store.database_url, job_id, "research.apify", "apify_dataset", response)
+    except httpx.HTTPError as exc:
+        return _apify_soft_fail(f"Could not reach Apify ({type(exc).__name__}). Falling back to free sources.")
+    if response.status_code >= 400:  # rejected key / no credits / rate limit — degrade, don't crash
+        return _apify_soft_fail(_apify_reason(response.status_code), response.status_code)
+    rows = response.json()
     stored = []
     for raw_row in rows[:clamped_limit]:
         row = raw_row if isinstance(raw_row, dict) else {"value": raw_row}
@@ -446,11 +482,15 @@ async def apify_collect(store: ResearchStore, job_id: int, apify_token: str, pla
     actor = spec.actor.replace("/", "~")
     clamped = engine.clamp_limit(limit)
     url = f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
-    async with httpx.AsyncClient(timeout=300, headers={"Authorization": f"Bearer {apify_token}", "User-Agent": _UA}) as client:
-        response = await client.post(url, params={"clean": "true", "limit": clamped}, json=actor_input)
-        raw_id = record_raw(store.database_url, job_id, f"research.apify.{platform}", "apify_dataset", response)
-        response.raise_for_status()
-        rows = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=300, headers={"Authorization": f"Bearer {apify_token}", "User-Agent": _UA}) as client:
+            response = await client.post(url, params={"clean": "true", "limit": clamped}, json=actor_input)
+            raw_id = record_raw(store.database_url, job_id, f"research.apify.{platform}", "apify_dataset", response)
+    except httpx.HTTPError as exc:
+        return _apify_soft_fail(f"Could not reach Apify ({type(exc).__name__}). Falling back to free sources.")
+    if response.status_code >= 400:  # rejected key / no credits / rate limit — degrade, don't crash
+        return _apify_soft_fail(_apify_reason(response.status_code), response.status_code)
+    rows = response.json()
 
     stored, kept = [], 0
     for raw in rows[:clamped]:

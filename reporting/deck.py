@@ -133,15 +133,16 @@ def _bullets(slide, items, top, *, size=16, height=Inches(4.6), color=_INK):
 
 
 def build_deck(job: dict[str, Any], synthesis: dict[str, Any], generated_at: str,
-               charts: list[dict[str, Any]] | None, path: Path) -> Path:
+               charts: list[dict[str, Any]] | None, path: Path, title: str = "") -> Path:
     prs = Presentation()
     prs.slide_width = _W
     prs.slide_height = _H
 
-    # 1 — Title
+    # 1 — Title. Use the cleaned report title, never the raw brief (which may open with a markdown
+    # header line like '# Research brief — internal' that reads terribly as a slide title).
     s = _blank(prs)
     _accent_bar(s)
-    _text(s, Inches(0.7), Inches(2.4), Inches(11.9), Inches(2.2), job.get("brief") or "Research report",
+    _text(s, Inches(0.7), Inches(2.4), Inches(11.9), Inches(2.2), title or job.get("brief") or "Research report",
           size=34, color=_INK, bold=True)
     _text(s, Inches(0.7), Inches(5.0), Inches(11.9), Inches(0.6),
           f"Research Oyster · {generated_at} · job #{job.get('id')}", size=13, color=_SUBTLE)

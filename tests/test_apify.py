@@ -3,6 +3,27 @@ from __future__ import annotations
 import unittest
 
 from research_engine import apify
+from research_engine.connectors import _apify_reason, _apify_soft_fail
+
+
+class ApifyGracefulDegradationTests(unittest.TestCase):
+    """A rejected/expired/credit-exhausted key must degrade to fallbacks, never raise — this is what
+    keeps a bad key from killing a live demo run."""
+
+    def test_reason_maps_common_failures_to_plain_english(self):
+        self.assertIn("rejected", _apify_reason(401).lower())
+        self.assertIn("rejected", _apify_reason(403).lower())
+        self.assertIn("credit", _apify_reason(402).lower())
+        self.assertIn("rate", _apify_reason(429).lower())
+        self.assertIn("not found", _apify_reason(404).lower())
+
+    def test_soft_fail_carries_fallbacks_and_next_step(self):
+        r = _apify_soft_fail(_apify_reason(401), 401)
+        self.assertTrue(r["apify_unavailable"])
+        self.assertEqual(r["status"], 401)
+        self.assertTrue(r["fallbacks"])            # the host is handed somewhere to go
+        self.assertTrue(r["next_step"])            # ...and a concrete first move
+        self.assertNotIn("Traceback", r["error"])  # never a raw exception
 
 
 class NumericExtractionTests(unittest.TestCase):

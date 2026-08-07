@@ -48,17 +48,22 @@ def _slug(text: str) -> str:
 
 
 def _report_title(brief: str) -> str:
-    """A short, clean report title from the brief — its first meaningful line, stripped of markdown
-    and any 'Research brief —' prefix, so the report doesn't render the whole brief as an H1."""
+    """A short, clean report title from the brief — the first meaningful line, stripped of markdown,
+    any 'Research brief —' prefix, and standalone label lines like 'internal'/'confidential'. A brief
+    that opens with a header line such as '# Research brief — internal' must NOT title the report
+    'internal' or render the whole brief as an H1 — skip the label and use the first real sentence."""
+    labels = {"internal", "confidential", "draft", "private", "research brief", "brief", "memo"}
     for line in (brief or "").splitlines():
         line = line.lstrip("#").strip()
         if not line:
             continue
         line = re.sub(r"(?i)^research brief\s*[—:-]\s*", "", line)
         line = re.sub(r"\s*\((?:internal|confidential)[^)]*\)", "", line, flags=re.I).strip(" —-")
+        if not line or line.lower() in labels:  # a bare label line — keep looking for the real title
+            continue
         if len(line) > 72:  # cut at a word boundary, never mid-word
             line = line[:72].rsplit(" ", 1)[0].rstrip(",;:—- ") + "…"
-        return line or "Research report"
+        return line
     return "Research report"
 
 
@@ -257,7 +262,7 @@ def _build_package(folder: Path, job: dict[str, Any], synthesis: dict[str, Any],
     try:
         from reporting import deck as deck_mod
 
-        produced.append(deck_mod.build_deck(job, synthesis, generated_at, charts, folder / "deck.pptx"))
+        produced.append(deck_mod.build_deck(job, synthesis, generated_at, charts, folder / "deck.pptx", title=title))
     except Exception as exc:  # pragma: no cover
         warnings.append(f"deck.pptx: {type(exc).__name__}: {exc}")
 

@@ -4,9 +4,38 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_engine.export import _build_package
+from research_engine.export import _build_package, _report_title
 from reporting import charts, package
 from reporting.tables import normalize_table, chart_series
+
+
+class ReportTitleTests(unittest.TestCase):
+    """The title is the first thing on every deliverable — it must never be a bare label like
+    'internal' or the whole brief rendered as an H1."""
+
+    def test_markdown_header_with_internal_label_is_skipped(self):
+        brief = ("# Research brief — internal\n\nWe're a kitchen-appliance brand weighing "
+                 "whether to build a competitor to the Ninja Creami")
+        title = _report_title(brief)
+        self.assertNotEqual(title.lower(), "internal")
+        self.assertTrue(title.startswith("We're a kitchen-appliance"))
+
+    def test_strips_research_brief_prefix(self):
+        self.assertEqual(_report_title("Research brief: Voltline EV sentiment"), "Voltline EV sentiment")
+
+    def test_skips_bare_label_line(self):
+        self.assertEqual(_report_title("## Internal\nShould we enter pickleball?"), "Should we enter pickleball?")
+
+    def test_plain_title_untouched(self):
+        self.assertEqual(_report_title("Ninja Creami competitor opportunity"), "Ninja Creami competitor opportunity")
+
+    def test_empty_brief_has_a_fallback(self):
+        self.assertEqual(_report_title(""), "Research report")
+
+    def test_long_title_cut_at_word_boundary(self):
+        title = _report_title("A" * 30 + " " + "word " * 40)
+        self.assertLessEqual(len(title), 73)
+        self.assertTrue(title.endswith("…"))
 
 
 SYNTH = {
