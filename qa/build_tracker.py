@@ -58,6 +58,7 @@ STORIES = [
     ("R5", "Report", "I open Sources-and-Citations.md", "numbered [n], each a deep link with its quote", "PASS", "Numbered [n] ledger with deep links, tool provenance, and the supporting quote.", "Read the file 2026-08-07: 16 [n] entries, e.g. [1] r/ninjacreami with the burning-blade quote + URL."),
     ("R6", "Report", "I get the charts + raw-data", "charts as PNG+SVG+CSV; raw-data per connector + evidence.json", "PASS (fixed)", "Files present. (Earlier fixed the 'Charts (folder)' chip: 400 → zip.)", "Grader 2026-08-07: 6 chart files + 4 raw-data files for job 1861."),
     ("R7", "Report", "I read the report as an exec", "at-a-glance box, 1-2 sentence POV, action titles, plain voice, real numbers", "PASS", "POV takes a position that disagrees with the brief ('trust, not texture'); action-title themes; plain voice; real counts (6 of 10 threads); triangulated vs Wirecutter.", "Read the synthesis + grader 2026-08-07: 0 banned jargon, 23 real numbers, action titles."),
+    ("CW1", "Report", "I read a finding — is it weighted by how many people agree?", "the report leads with what the crowd most ENDORSES (aggregate upvotes/likes/shares), not raw mention count; cites the endorsement", "PASS (fixed)", "NEW: a comment is worth the people behind it. patterns.weighted_consensus reads engagement from every metadata shape (incl. the Reddit top-level keys the metrics layer was dropping), ranks by conviction (shares>upvotes>comments, views damped, dislikes subtract), and the synthesis leads with it. Types-of-comments sentiment is the staged fast-follow.", "LIVE run job 2102 (2026-08-07): report cites '176 upvotes', '65 upvotes', 'top-voted'; analyze_chatter called 10x; 24/58 rows carried engagement. Unit-tested."),
     # --- Settings / endpoints / robustness ---
     ("E1", "Endpoint", "The page checks health", "/api/health returns db+auth, no secrets", "PASS", "db+auth only, no secret-looking values.", "Wire 2026-08-07: keys=[db,auth,mcp_python…]; no secret pattern in body."),
     ("E2", "Endpoint", "I view my saved keys", "/api/settings GET returns presence only, never secrets", "PASS", "presence map only.", "Wire 2026-08-07: all values booleans; no raw secret strings."),
@@ -126,15 +127,21 @@ def build(path: Path) -> None:
         "DEFER         — real gap, deliberately deferred post-demo.",
         "",
         "The last column names the exact evidence behind each verdict TODAY — a live run, a wire",
-        "test, a Playwright drive, or code review only. The anchor is fresh end-to-end runs through",
-        "the real UI (a Ninja Creami brief → report job 1861; an AirPods brief live). Those runs +",
-        "the surface tests found 5 real defects, all now fixed and re-tested:",
+        "test, a Playwright drive, or code review only. The definitive anchor is a FRESH end-to-end",
+        "run through the real UI on current code (a Breville Barista Express brief → report job 2102),",
+        "plus earlier runs (Creami 1861, AirPods) and the surface tests. Six real defects found this",
+        "pass, all fixed and re-verified in a fresh run:",
         "  • E5/UX1 — the Report tab leaked 'write_research_synthesis' + a stack trace, and logged",
         "    409s, when opened mid-run → calm 200 'being prepared' page.",
         "  • R3/R7 — gaming language ('What players are saying') on a kitchen report → neutral.",
         "  • R1/R4 — every deliverable was titled 'internal' → clean title from the first sentence.",
         "  • AP2 — a wrong/expired/credit-exhausted Apify key CRASHED the run (raw 401) → degrades",
-        "    to free sources with a plain reason. This is the big demo-safety fix.",
+        "    to free sources with a plain reason.",
+        "  • MCP reap — a killed Studio orphaned its MCP server, so fresh runs silently used STALE",
+        "    code (this was defeating the fixes above); now reaped on startup. THE sneaky one.",
+        "  • CW1 — findings were counted by mention, not weighted by endorsement; now the report",
+        "    leads with consensus (upvotes/shares), the feature added this pass because it changes",
+        "    the answer, not the polish.",
     ]
     for j, line in enumerate(legend, start=row + 2):
         c = s2.cell(row=j, column=1, value=line)
