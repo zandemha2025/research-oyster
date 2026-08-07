@@ -1,165 +1,97 @@
-# The Acquisition Engine — how Oyster actually GETS the real numbers
+# Oyster Acquisition Engine — how we get the real numbers, every time
 
-> The doc the whole roadmap points at. `DATA-SOURCE-COVERAGE` says *what* to reach and *which gates*
-> keep it trustworthy; `BUILD-PLAN*` says *in what order*; `EVIDENCE-LAYER` says *what shape* the
-> result takes. **This doc answers the one question the user kept asking:** "it can't be that Oyster
-> still says fail, or couldn't get it, or zero shares — you need to know *exactly* how to solve it."
-> Here is exactly how, per platform, grounded in the code that already does it.
+> This document answers exactly one question: **when a user asks "how much engagement is behind this content," how does Oyster return a real number — never "couldn't get it," never a fake `0`?** `BUILD-PLAN.md` is the sequence, `DATA-SOURCE-COVERAGE.md` is the catalog, `EVIDENCE-LAYER.md` is the output shape. This is the *acquisition* layer underneath all of them — the ordered method for turning a public post into a trustworthy count.
 
-## The thesis (and why official APIs are the wrong frame)
+## 1. The thesis
 
-A user comes to Oyster **because they couldn't get the number themselves.** So "we couldn't get it"
-is never an answer — it's the restatement of their problem. The whole job is to actually get it.
+**The numbers are already public. The problem was never existence — it is acquisition.**
 
-The good news that makes this tractable: **the engagement numbers are already public.** When you load
-a Reddit thread, a TikTok video, a Kick channel, a Discord server — the likes, upvotes, viewers,
-followers, member counts are *rendered on the page*. They arrive from the platform's own **internal
-JSON / GraphQL endpoints** that the site's front-end calls. Nothing is hidden; it's just not handed to
-you in a tidy API.
+Three facts, established across every platform we audited, reset how we build:
 
-Official APIs are **not** the path (this was the user's correction, and it's right):
-- Reddit's API is gated/expensive and hard to get approved — not worth it.
-- X's API is priced out of research use.
-- TikTok has no real public engagement API; YouTube/Twitch/Meta/IG are all gated or partial.
-- If an official API made this easy, everyone would already be doing it. The moat *is* the acquisition.
+1. **Official APIs are a dead end for third-party engagement — by design, not by accident.** Meta's Graph API needs App Review + Business Verification and declines exactly our use case; CrowdTangle is dead and its replacement is academic-only. Instagram's Business Discovery excludes personal accounts, hashtag discovery, and (as of 2026) view counts. TikTok's Research API bars commercial use, and its numbers lag ~10 days and undercount by orders of magnitude. X charges ~$0.005/read with a 2M/month ceiling and no cheap search. Reddit's compliant commercial tier floors at ~$12k/month. The pattern is uniform: where an official read path for arbitrary public content exists at all, it is priced, gated, or rejected into irrelevance. **Only three platforms buck this** — YouTube (free, real third-party counts), Twitch (free Helix), and Reddit's server counts / Discord's invite endpoint (free, unauthenticated). Where the official path is genuinely good, we use it first. Everywhere else, we stop pretending it is the answer.
 
-So the problem is not "which API." **The problem is reliable acquisition of numbers that are already
-public.** That's an engineering problem with three known techniques — and Oyster already runs all three.
+2. **Every count is rendered on a public page — because the page itself fetches it before it paints it.** Instagram draws likes from `graphql/query`; TikTok ships every count in a `__UNIVERSAL_DATA_FOR_REHYDRATION__` blob; X nests them under `legacy` in `TweetResultByRestId`; Facebook embeds a `Feedback` object in server JSON; Snapchat puts `engagementStats` in `__NEXT_DATA__`; Reddit's numbers still sit in the page's own internal JSON. **The number is on the page. It always is.** The only question is whether we can fetch that page's own data feed without being blocked.
 
-## The three acquisition techniques (this is the "how")
+3. **So the real problem is a reliability-and-blocking problem, and its solution is an engineering portfolio, not a clever trick.** The counts sit behind IP-reputation checks, TLS fingerprinting, rotating signatures (`doc_id`, `X-Bogus`), and behavioral anti-bot (Cloudflare, DataDome, HUMAN). Beating that stack is a *maintained* capability — it breaks every 2–4 weeks when a platform rotates a signature. The dominant 2026 posture is **"rent the maintenance, don't build it"**: route each request through a managed actor/vendor that keeps the proxy pool, fingerprint, and signer current, and buy structured JSON back. Oyster's engine is a portfolio: **licensed/official where it's real and cheap → managed internal-endpoint capture where it isn't → the user's own session for what's private → an honest labelled state when even that is exhausted.**
 
-| # | Technique | What it defeats | In Oyster today |
-|---|-----------|-----------------|-----------------|
-| **T1** | **Internal endpoint + real-browser TLS fingerprint** — hit the platform's own JSON/GraphQL endpoint directly, but with a genuine browser's TLS/JA3 fingerprint so it's served, not 403'd. | Cloudflare / bot walls that block "a script" but pass "a browser." | ✅ **`curl_cffi` `impersonate="safari17_0"`** — `connectors.py:578-593` (`_kick_get_blocking`). Verified live. |
-| **T2** | **Managed scraper fleet** — residential-proxy rotation + headless-browser fingerprinting at scale, run by a provider (Apify) so you're not maintaining the anti-bot arms race. | IP-based rate limits, per-session challenges, JS-gated content, volume. | 🔌 **Apify engine** — `apify.py` (curated actor registry) + `connectors.apify_collect` / `run_apify_actor`. Wired; needs `APIFY_TOKEN`. |
-| **T3** | **Server-side JS render → text** — a reader service loads the page (JS and all) on *its* servers and hands back clean text, no browser tab open on your side. | JS-heavy public pages that return boilerplate to a plain fetch. | ✅/🔌 **Jina Reader `r.jina.ai`** + **Scrapling** fallback — `connectors.crawl_web_page` (`:770`). Works keyless; key lifts the rate limit. |
+The consequence for the product is the guarantee in `BUILD-PLAN-PHASE1.md`, restated in acquisition terms: **a field never resolves to a fake `0`.** A `0` prints only when it is a *verified real* zero. Everything else resolves to a labelled state (`not_applicable`, `needs_auth`, `suspect`, `proxy`, `missing`) — because the acquisition engine below always has one more door to knock on, and reports exactly which door delivered the number.
 
-**T1 is the free, precise path** (the exact number straight from the source, one channel at a time).
-**T2 is the scale path** (hundreds of rows, the hard walls, residential IPs). **T3 is for editorial /
-long-form pages.** Every source below is one of these three plus a fallback chain and a tier label.
+## 2. The acquisition engine — the ordered method
 
-## Per-platform: where the number lives, and exactly how Oyster gets it
+Given `(platform, public target)`, Oyster walks a fixed ladder and **defaults to the strongest route that returns the field**, falling to the next only when a route is missing, contract-fails, or comes back `suspect`. This is the `collect_gateway.collect()` fallback chain from Phase 1, made concrete for acquisition. Every rung stores provenance; no rung ever dead-ends.
 
-Legend: ✅ verified live in this session · 🔌 wired in code, needs a key · 📋 planned (spec'd in Phase 1/3).
+**Rung 0 — Licensed / official, if it is real and affordable.** If the platform hands over third-party public engagement cleanly and cheaply, stop here — nothing below beats it for cost or stability. In practice this is exactly three lanes: **YouTube Data API v3** (`videos.list?part=statistics`, 50 IDs/call, 1 unit — near-free view/like/comment counts), **Twitch Helix** (app token, free — viewer/VOD/clip counts, already live in `collectors/twitch.py`), and the **free unauthenticated endpoints** (Reddit's approved OAuth app at 100 QPM non-commercial; Discord's `invites/{code}?with_counts=true`; editorial RSS). We never route these through a scraper — it would be slower, dirtier, and pointless.
 
-### Reddit — upvotes, comments (shares/dislikes are `not_applicable`, never 0)
-- **Where the number lives:** every listing and thread has a `.json` twin (`/r/<sub>/search.json`,
-  `<permalink>.json`) carrying `score`, `ups`, `num_comments`.
-- **How Oyster gets it:**
-  1. ✅ **T1 free** — `search_reddit` hits `www.reddit.com/…/search.json` (`connectors.py:1048-1067`).
-     Datacenter IPs sometimes 403 → route to **old.reddit** (server-rendered) → still blocked → T2.
-  2. 🔌 **T2 scale** — Apify `trudax/reddit-scraper-lite` (`apify.py` REGISTRY) with `includeScore` in the
-     input contract, so `upvotes:0` can't come back silently (the SGF failure).
-- **Field truth:** `shares` and raw `dislikes` **don't exist publicly on Reddit** → declared
-  `not_applicable` in the registry → omitted or "n/a on Reddit," **never printed as 0.**
-- **Window:** Reddit lies about time in listings → **base-36 submission-ID windowing** (Phase-1 gate 4)
-  drops 2020 posts from a 2026 pull.
+**Rung 1 — Target the internal JSON endpoint, never the rendered HTML.** For everything Rung 0 doesn't cover, identify the private JSON/GraphQL call the page makes to fetch its own counts (IG `graphql/query` + `doc_id`; TikTok `__UNIVERSAL_DATA_FOR_REHYDRATION__` or signed `/api/*`; X `TweetResultByRestId`; FB `/api/graphql/`; Snapchat `__NEXT_DATA__`). Capturing that feed is 10–100× faster and cleaner than DOM parsing, and it returns the counts as typed numbers. This is the technique `apify.py` already embodies — actors *are* maintained internal-endpoint capturers.
 
-### TikTok — views, likes, comments, shares
-- **Where:** each video row from the internal feed carries `playCount`, `diggCount`, `commentCount`,
-  `shareCount`.
-- **How:** 🔌 **T2** — Apify `clockworks/tiktok-scraper` (`apify.py`), numeric extraction via
-  `_METRIC_ALIASES` (`diggCount→likes`, `playCount→views`, `shareCount→shares`).
-- **Gotchas handled:** the `view_count=1` protection artifact → `sane_min` plausibility floor → `suspect`
-  → re-pull (Phase-1). Demo-filtered reach (US/18–24) needs **Creative Center (authed cookie)** →
-  📋 tier-labelled; free path gives broad hashtag frequency and *says so*.
+**Rung 2 — Choose the lightest client that clears the target's defenses.** Three tiers, cheapest first:
 
-### X / Twitter — text + public_metrics (likes, reposts, replies, quotes)
-- **Where:** tweet objects carry `public_metrics`; the API is priced out, but scraper actors read the
-  same rendered numbers.
-- **How:** 🔌 **T2** — `apidojo/tweet-scraper` (`apify.py`) returns tweet **text + metrics** (this is the
-  fix for the old "profile-scraper returned follower counts instead of tweets" failure).
-- **Empty `top_tweets` in a cycle** → route contract fails → fallback to the next tweet actor (gate 3).
+- **(a) HTTP + TLS impersonation through a residential proxy.** `curl_cffi` (Chrome/Safari impersonation) reproduces a real browser's JA3/JA4 handshake so the anti-bot edge doesn't 403 us at the TLS layer, routed through a **residential** IP because datacenter ASNs (AWS/Hetzner) are blocked wholesale on reputation alone. This clears soft targets and API-backed sites. **Oyster already runs exactly this** for Kick (`_kick_get_blocking`, Safari impersonation past Cloudflare) — the pattern generalizes.
+- **(b) A CDP-patched real browser** when the endpoint needs an in-page-computed signature (TikTok `X-Bogus`, rotating IG `doc_id`) or the site throws a JS/behavioral challenge. Let the platform's *own* JavaScript mint the signature, then read the internal JSON off the network. Vanilla Playwright is now fingerprintable (Cloudflare detects the DevTools Protocol), so we use `patchright` (already installed) / nodriver-class patched browsers, not stock automation.
+- **(c) Mobile (4G/5G) proxies** for the hardest IP-reputation targets — Instagram and TikTok at scale — where carrier-NAT IPs can't be blanket-banned without collateral damage, so platforms trust them.
 
-### Instagram — likes, comments, followers, views
-- **Where:** post/profile JSON carries `likeCount`, `commentCount`, `followersCount`, video `viewCount`.
-- **How:** 🔌 **T2** — `apify/instagram-scraper` with two intents: `hashtag` (posts) and `profile`
-  (details). Empty Explore arrays → silent-empty gate → re-config/re-pull.
+**Rung 3 — If self-maintaining any of that is too fragile, rent it.** Route `(platform, target)` through a managed Apify actor (`clockworks/tiktok-scraper`, `apify/instagram-scraper`, `apify/facebook-posts-scraper`, `trudax/reddit-scraper`) or a platform data API (twitterapi.io, ScrapeCreators, EnsembleData, Bright Data) and take the structured JSON. **This is Oyster's default for IG/TikTok/X/Facebook/Snapchat** — the vendor absorbs the proxy + fingerprint + signature + `doc_id` treadmill that would otherwise break us every 2–4 weeks. It is the single biggest reliability decision in the engine: we pay per result to make someone else own the breakage.
 
-### YouTube — views, likes, comments, subscribers
-- **Where:** watch/search payloads carry `viewCount`, `likeCount`, `commentCount`, `subscriberCount`.
-- **How:** 🔌 **T2** — `streamers/youtube-scraper` (`apify.py`). (Data API v3 exists free-tier but is
-  quota-capped and gated — kept only as an optional authed accelerator, not the primary path.)
+**Rung 4 — The user's own session, for what is genuinely private.** A small set of fields live only behind a login the user legitimately holds: Reddit's now-login-gated pages, X `TweetDetail` replies (needs an auth cookie), Discord reactions/replies (visible only from inside a server), any field a logged-out fetch can't see. For these, Oyster uses the **browser extension** — the user, in their own signed-in browser, on a page they open, approves a scoped session; `session_recorder.js` captures the page's *own* internal JSON responses (never cookies, headers, or tokens) and relays the counts back. This is a consenting, logged-in, user-driven capture — the private-data rung, off by default, never automated on the user's behalf.
 
-### Twitch — live viewers, followers, clips-by-views, chat
-- **Where:** Helix endpoints + the live IRC.
-- **How:**
-  1. ✅ **T1 free, no login** — `read_twitch_chat` reads **anonymous WSS IRC** (`connectors.py:1370`).
-     Verified: 11 live #xqc messages in ~5s.
-  2. 🔌 **authed accelerator** — **Helix API** (free *app* token via `twitch_client_id/secret`,
-     `search_twitch` `:520-533`): clips ordered by view count, live streams + viewer counts, VODs, followers.
-  3. 🔌 **T2** — `automation-lab/twitch-scraper` for channel stats at scale.
+**Rung 5 — Normalize, gate, and label.** Whatever route delivered, the row passes through the same discipline `apify.py` already implements and Phase 1 generalizes: pull the metric out shape-tolerantly (`extract_metrics`), enforce the date window locally (`within_window`), and run the **three-state field model** — a uniform-zero/null/`view_count=1` batch is `suspect` and triggers a re-pull on the next route, not a scored `0`; a metric the platform doesn't have is `not_applicable` and omitted; a field only a login yields is `needs_auth` and carries the caveat. **This is what makes "never a fake 0" true no matter which rung fired.**
 
-### Kick — followers, live viewers, category, chat  ✅ the proof case
-- **Where:** `kick.com/api/v2/channels/{slug}` returns `followers_count`, `livestream.viewer_count`,
-  `livestream.categories[]`, `is_live`. The public endpoint **403s a plain script** under Cloudflare.
-- **How:** ✅ **T1** — `search_kick_public` (`connectors.py:632`) hits it via `_kick_get_blocking` with
-  **`curl_cffi impersonate="safari17_0"`** (Safari fingerprint passed where Chrome got reset). Verified
-  live: xqc **1,098,986** followers / LIVE / 7,845 viewers; adinross 2.1M; westcol 4.0M. Discovery via
-  `/api/search?searched_word=…` (same fingerprint) resolves slugs from a keyword. **No OAuth needed.**
-- This is the whole thesis in one working connector: a "you can't get it" number, gotten, free, today.
+The engine's discipline in one line: **try the strongest real route, prove the field came back non-uniform, and if it didn't, walk to the next door and record that you did.**
 
-### Discord — server member / online counts (always), messages (opt-in)
-- **Where:** the public invite API + `guilds/{id}/widget.json` expose member and online counts with no token.
-- **How:**
-  1. ✅ **T1 free, always-on** — `inspect_discord_invite` (`connectors.py:251`) reads invite +
-     `widget.json`. Verified: Python ~429k/~35k online, OpenAI ~854k/~80k, Minecraft ~4.0M/~454k.
-  2. 📋/🔌 **opt-in messages** — `harvestedge/discord-message-scraper` (`apify.py`, `opt_in=True`) needs a
-     burner research token; ToS-gray, **off by default, per-run toggle + warning.** This is the realistic
-     path to third-party server messages (the Oyster bot won't be in arbitrary servers).
+## 3. Per-platform routes
 
-### Editorial / trade press (Glossy, Teen Vogue, WWD, YPulse, …)
-- **How:** ✅/🔌 **T3** — `crawl_web_page` server-side reader for the article body; **RSS-first** fallback
-  registry (gate 3) for sites whose direct scrape returns empty (Teen Vogue → RSS, fixed).
+For each platform: what numbers are actually obtainable, the concrete route Oyster runs (in fallback order), what that route needs, and the honest ceiling.
 
-### Google Trends / retail PDPs / Steam / Goodreads
-- **How:** 🔌 **T2/T3** — Apify actors + reader. Trends null-term → `missing`, **never** coerced to
-  0-interest (gate 1). SteamSpy null for new titles → fall back to Store review-count route (gate 3).
+| Platform | Numbers obtainable | Oyster's route (in order) | What it needs | Honest ceiling |
+|---|---|---|---|---|
+| **Reddit** | upvotes (fuzzed net score), upvote ratio, comment count, Reddit Gold count, subscriber count; per-post & per-comment score | **1.** Apify `trudax/reddit-scraper` (Playwright warm-up — handles the June-2026 login gate + Cloudflare) → **2.** official OAuth API (approved app, 100 QPM, per-item score/ratio/comments) → **3.** self-host Playwright + **warm logged-in cookie** + residential proxy → history via Arctic Shift / PullPush | APIFY_TOKEN (default); or an **approved** Reddit OAuth app; residential proxy + warm session for self-host | **Views never public** (author-only). No share metric exists. Upvotes are **fuzzed** — raw up/down split unobtainable. Anonymous `.json` and old.reddit are **403/login-gated since mid-2026** — do not ship a scraper that assumes them. Score is a snapshot; no retroactive time-series. |
+| **YouTube** | views (exact), likes (rounded), comment count (exact), comment text + per-comment likes, subscriber count (3 sig figs) | **1.** official **Data API v3** `videos.list?part=statistics` (50 IDs/call, 1 unit) + `commentThreads.list` — the default whenever IDs are known → **2.** managed vendor/actor (`streamers/youtube-scraper`, ScrapeCreators) **only** for brand-wide discovery (avoids `search.list` burning quota) and high-volume comments → **3.** self-host InnerTube (`youtubei/v1/next`) behind residential proxies | A Google Cloud API key (free, 10k units/day); a vendor key only for discovery/scale | **Dislikes are dead** (API returns 0; RYD estimates only, ±15–25%). Likes/subscribers are **rounded** for third parties. **No share count.** Watch-time, impressions, CTR, demographics are owner-only Analytics. Discovery (`search.list` = 100 units) is the only real quota constraint. |
+| **Twitch** | live/concurrent viewers, VOD & clip view counts, category/directory totals (Helix); **follower count** (GQL); live chat going forward | **1.** **Helix app token** for viewer/VOD/clip/directory counts — already live in `collectors/twitch.py`, clean, no proxy → **2.** one direct call to `gql.twitch.tv/gql` with the public Client-ID for follower `totalCount` (Helix's one gap) → **3.** anonymous `wss://` IRC (`justinfan`) for chat → aggregators (TwitchTracker/SullyGnome) for historical curves | A free Twitch dev app (Oyster holds it); public Client-ID header for the GQL follower call; residential proxy only at high polling volume | **Subscriber counts never public.** No public whole-stream total-view number (only current concurrent + aggregator peak). No historical follower series from Twitch itself — poll and store, or read aggregators. Chat is live-forward only; no bulk history. Unique-viewer/watch-time/retention are creator-only. |
+| **X / Twitter** | likes, reposts, replies, quotes, **views/impressions**, bookmarks, follower/following counts | **1.** managed vendor **twitterapi.io** (~$0.15/1k, full engagement incl. views, single-header, handles the treadmill) for search + per-post metrics → **2.** Apify `apidojo/tweet-scraper` when bookmarks specifically needed → **3.** free `cdn.syndication.twimg.com/tweet-result` for a single known tweet (**likes + replies only** — no views/bookmarks/reposts) → DIY guest-token + `doc_id` + Turnstile only if volume dominates vendor fees | A vendor API key (recommended); nothing but outbound HTTPS beyond that | Analytics breakdown (impression sourcing, profile/link clicks) is owner-only forever. `views.count` is null on old/pre-counter tweets. Full follower **lists** are gated even though counts are free. **Any DIY method breaks every 2–4 weeks** on token/`doc_id` rotation — the reason we default to a vendor. No historical series; snapshot and store. |
+| **Meta / Facebook** | reactions total + 7-type breakdown (actor-dependent), comment count, share count, page follower count, video views (inconsistent) | **1.** managed Apify actor `apify/facebook-posts-scraper` (+ `facebook-comments-scraper`) with **residential proxy on** → **2.** Bright Data Facebook Posts Scraper API (~98% success) for scale/reliability. **Do not** self-host (the `doc_id` + fingerprint + residential treadmill isn't worth it); **do not** rely on Graph API/PPCA (approval gate) or CrowdTangle (dead) | APIFY_TOKEN + residential-proxy flag on the actor input; a Bright Data key for the fallback | **Impressions/reach/saves/demographics are owner-only** — never public, any price. No public view count for non-video posts. Scraped comment counts can **undercount** (hidden/limited-audience comments invisible logged-out). "Who reacted/commented" is PII → GDPR exposure, avoid. Everything is a snapshot; poll for trend. |
+| **Instagram** | likes (when not owner-hidden), video views / reel plays, comment counts + text + per-comment likes, follower/following/post counts, liker usernames | **1.** Apify `apify/instagram-hashtag-scraper` for discovery → `apify/instagram-scraper` for profile/post likes/views/comments/followers → `apify/instagram-comment-scraper` for sentiment (all logged-OUT, residential proxy) → **2.** Bright Data for bulk → **3.** self-host `web_profile_info` + `graphql/query` via `curl_cffi` + rotating residential/mobile + a `doc_id` refresh job | APIFY_TOKEN (default, already wired); residential/mobile proxy + `x-ig-app-id` + `doc_id` upkeep for self-host | **Hidden like counts** → null (can enumerate likers but it's costly/incomplete). **Saves and shares/sends are never public** — hard gap. Reach/impressions/story views owner-only. The 2025 "views merge" makes the single views number ambiguous. Scale is a ~200 req/hr/IP **budget** problem, not a data problem. Route nulls and `view_count=1` through the silent-zero gate. |
+| **TikTok** | views (playCount), likes (diggCount), shares (shareCount), comments (commentCount), saves (collectCount), followers, comment text + per-comment likes | **1.** Apify `clockworks/tiktok-scraper` (or video/profile/hashtag variants) — Apify absorbs residential proxies + `X-Gnarly`/`msToken` signing, returns all five counts (~$1.70/1k) → **2.** vendor swap (ScrapeBadger/Scrapfly/Bright Data/EnsembleData) if success dips → **3.** self-host Tier-1 `__UNIVERSAL_DATA_FOR_REHYDRATION__` parse + a `webmssdk` signer microservice for paginated/search/comment endpoints | APIFY_TOKEN (default); residential/mobile proxy + signer for self-host. **Never** the Research API | Counts are **rounded** (1.2M). Research API lags ~10 days and undercounts by orders of magnitude — unfit. No private/friends-only content. Watch-time/completion/retention/demographics are creator-only. Deleted/geo-blocked/shadow-restricted → placeholder or vanish. Deep comment threads & full follower lists are rate-limited and fragile. No dislikes exist. |
+| **Snapchat** | Spotlight views, shares, comments (+ text), profile subscribers; likes **conditionally** (only if creator left "Show Favorite Counts" on); Trends keyword volume (relative) | **Discovery first** (resolve the `@handle` / Spotlight URLs via web search), then **1.** managed **ScrapeCreators** API (`/v1/snapchat/profile`, `/spotlight`, `/spotlight/comments`) → **2.** Apify `tri_angle/snapchat-spotlight-scraper` + a profile actor → **3.** DIY `__NEXT_DATA__` parse behind residential proxy | A ScrapeCreators key (default) or APIFY_TOKEN; a discovery step in every case | **Story metrics never public** (view counts/viewer lists owner-only). **Favorites/likes creator-toggleable** and often off — unreliable. Fresh Spotlights return **`viewCount = -1`** — treat as "not yet available," re-pull; never score as 0. Trends is **relative/indexed**, not absolute. **Discovery is the real wall** — no public keyword/hashtag content search, so broad brand-mention UGC is largely closed; brand's own profile + Spotlights is fully coverable. |
+| **Discord** | member count + online/presence count (clean, free); reactions & replies **only** via burner self-bot after joining (ToS-violating) | **1. (default)** unauthenticated `GET /api/v10/invites/{code}?with_counts=true` → `approximate_member_count` + `approximate_presence_count`; poll on a cadence and **store your own timeseries** for growth — already in `collectors/discord.py`. Widget.json only as fallback (usually 403). **Escalation (opt-in, explicit risk):** burner account joined to the target server + its user token → DiscordChatExporter / Apify message actor behind residential proxy | Tier 1: just the invite code + light IP rotation to survive Cloudflare 1015 (no account/token/proxy). Tier 2: a **burner user token** (the `opt_in` path already in `apify.py`) + residential proxy | **No views/shares/upvotes/dislikes/saves exist** on Discord — cannot be acquired because they don't exist. Reactions/replies visible **only from inside a server** → arbitrary third-party capture forces a ToS-violating self-bot on disposable burners. Gated channels stay invisible even to a joined burner. Invite counts are "approximate" snapshots. |
+| **News / editorial** | publication volume + recency + outlet + author (**free, reliable**); approximate Facebook interactions per URL; cross-platform Total Engagement per URL; X shares; Reddit upvotes+comments on submissions linking the URL; on-page comment counts only where a public comment system runs | **Layer 1 (default, shipped in `collectors/press.py`):** each outlet's RSS + Google News RSS (`news.google.com/rss/search?q=BRAND`, no key) + news sitemaps → volume/recency/outlet/author. **Layer 2 (the engagement number):** a cross-platform aggregator — BuzzSumo API (Total + FB/X/Pinterest/Reddit breakdown), SharedCount (cheap FB tap, free 10k/mo), NewsWhip (real-time, enterprise) → or DIY: attribute social posts back to the URL via Oyster's own FB/X/Reddit routes | Layer 1: nothing (a sane UA). Layer 2: a BuzzSumo/SharedCount/NewsWhip key, or the social-scraper routes above | **No single accurate per-article engagement number exists** — even NewsWhip/BuzzSumo approximate, FB+X-weighted, because FB's own numbers are deliberately imprecise. **Pageviews impossible** (first-party GA4 only). FB is the biggest surface and most closed post-CrowdTangle. Dark social (DMs/WhatsApp) unrecoverable. Historical accrual only from a tool watching at publish time. **FB/SharedCount routinely return all-zeros** — must go through the silent-zero gate, never scored as "no engagement." |
 
-### Syndicated / paywalled (Mintel, Circana, NIQ, WGSN, Trendalytics)
-- **How:** 📋 honest **`tier="paywalled"`, `kind="manual"`** — trade-press summary or gated paste-in,
-  **labelled as such, never presented as the full dataset** (gate 6). The one place "we don't have the
-  raw feed" is the *honest* answer — and it's stated as a tier, with a proxy offered, not as a failure.
+**The cross-cutting rule for the table:** where a cell says "never public / doesn't exist" (Reddit views, IG saves/shares, YouTube dislikes/shares, Discord views), the field resolves to `not_applicable` and is **omitted with a one-line reason** — it is never a `0`. Where a cell says "hidden / suspect / -1 sentinel," it resolves to `suspect` and triggers a re-pull. That is the anti-fake-zero contract expressed per platform.
 
-## What ties acquisition to "never a fake 0 / never a bare fail"
+## 4. What Oyster must add — mapped to the codebase
 
-Getting the number is T1/T2/T3. **Not lying when a specific field is genuinely unavailable** is the
-three-state field model from `BUILD-PLAN-PHASE1.md`, applied to whatever acquisition returns:
+Oyster already has the *shape* of this engine: a curated actor registry with numeric extraction and window discipline (`apify.py`), a real-browser fingerprint lane (`connectors._kick_get_blocking`), a web reader, Helix and Discord-invite and RSS collectors, a consenting internal-JSON session capturer (the extension), and the Phase-1 gateway spec. Five concrete additions turn that into the full acquisition engine. Each is scoped to existing files.
 
-- got it → `value` (real, weighted).
-- platform has no such metric (Reddit shares) → `not_applicable` (omitted, never 0).
-- uniformly 0/null across the batch while other signal is present → `suspect` → **auto re-pull via the
-  next route in the chain** before anything prints.
-- every route exhausted → an **itemized "we knocked on N doors for X; the proxy we used is Y"** line —
-  specific and forward, never "failed."
+**1. Residential-proxy wiring on the Apify path — the highest-leverage single change.** Today `connectors.apify_collect` (line 461) posts `actor_input` with **no `proxyConfiguration`**, and none of the input builders in `apify.py` set one. IG/TikTok/FB/Reddit actors need residential IPs or they silently 403/return uniform-zero. Fix: add a per-`ActorSpec` proxy policy and inject it centrally.
+   - In `apify.py`: add a `proxy: str = ""` field to `ActorSpec` (values `""`/`"residential"`/`"mobile"`), and in `build_input` merge `{"proxyConfiguration": {"useApifyProxy": True, "apifyProxyGroups": ["RESIDENTIAL"]}}` when the spec demands it. Set `proxy="residential"` on the IG, TikTok, Facebook, and Reddit specs.
+   - In `connectors.apify_collect`: no change to the HTTP call — it already forwards `actor_input`; the proxy simply rides in the input. For the **self-host** fingerprint path (below), add `RESIDENTIAL_PROXY_URL` / `MOBILE_PROXY_URL` to `.env.example` (today it has no proxy key at all).
 
-So acquisition (this doc) makes the number *obtainable*; the gateway + three-state model
-(`BUILD-PLAN-PHASE1`) makes the *reporting of it* honest; the evidence layer (`EVIDENCE-LAYER`) wraps
-each obtained number in source + confidence + freshness. Three layers, one promise: **real numbers,
-with receipts, and no fake zeros.**
+**2. Internal-endpoint actors + a field-coverage contract in the registry.** Extend `apify.py::REGISTRY` with the routes the audit identified as missing, and add the Phase-1 `requires` contract so a route that drops its contracted field **fails to the next route** instead of returning a partial row:
+   - Add `("facebook","page")` and `("facebook","post")` → `apify/facebook-posts-scraper` (+ a comments variant), with input builders that enable residential proxy and a shape-tolerant extractor for `reactions/shares/comments` (the existing `_METRIC_ALIASES` + `extract_metrics` already cover these once the aliases include `reactionscount`/`sharecount`).
+   - Add `("snapchat","profile")` / `("snapchat","spotlight")` → ScrapeCreators (managed API, add `SCRAPECREATORS_API_KEY`) with `tri_angle/snapchat-spotlight-scraper` as the Apify fallback; wire the two Snapchat data-quality gates (`viewCount == -1` → `suspect`/re-pull; missing favorites → `needs_auth`-style "creator disabled," not zero).
+   - **Upgrade** `("reddit","search")` from `trudax/reddit-scraper-lite` to the Playwright-warm-up `trudax/reddit-scraper` (the lite/`.json` actors 403 post-mid-2026).
+   - Add `("youtube","stats")` as an **official-API route** (not an actor) so the gateway prefers the free Data API when video IDs are known, and keeps `streamers/youtube-scraper` only for discovery.
+   - Add a `requires: frozenset` to `ActorSpec` (mirrors Phase-1 `Route.requires`) and assert it in `apify_collect` after `extract_metrics` — this is the SGF field-coverage contract, enforced consumer-side because a third-party actor can't run our CI.
 
-## Where this already runs vs. what to build
+**3. Fingerprint upgrades in `connectors.py` — promote the Kick lane to a general route.** Today the real-browser lane is Kick-only (`_kick_get_blocking`, Safari impersonation) plus Scrapling in `crawl_web_page`. Generalize it into the Phase-1 `fingerprint` route kind, in two tiers:
+   - **Cheap tier:** a `curl_cffi` Chrome-impersonation fetcher (the `_kick_get_blocking` pattern, parameterized by target) through the residential proxy from addition #1 — clears TLS-layer 403s on soft/API-backed targets.
+   - **Hard tier:** a `patchright`-driven CDP-patched browser (already installed in the venv) for JS/behavioral challenges and in-page signature minting (TikTok `X-Bogus`, rotating IG `doc_id`), reading the internal JSON off the network. This is the self-host fallback for when a vendor is down — not the default, but the thing that makes us not depend on any single vendor.
 
-**Runs today (free, verified live):** Kick (T1 fingerprint), Discord counts (T1 invite), Twitch chat
-(T1 WSS), Reddit `.json` (T1), web reader (T3). These need **no keys** — Oyster gets real numbers on a
-cold install.
+**4. Session capture as a first-class gateway route — the private-data rung.** The extension's `session_recorder.js` already does the hard part: on a user-approved domain, it wraps the page's own `fetch`/`XMLHttpRequest` and relays the internal JSON responses (never cookies/headers/tokens) back to the job. Today it's a manual capture surface. Wire it as a `Route(kind="session", tier="authed")` in the Phase-1 `sources.py` so the **gateway itself** can, for a field no logged-out route reaches (Reddit login-gated pages, X `TweetDetail` replies, Discord reactions), emit a `needs_auth` state that surfaces a "capture this in your browser" request through the existing `request_browser_traffic_session` flow — turning the extension from an ad-hoc tool into the engine's authenticated tier, still fully consenting and never automated.
 
-**Wired, needs one key (`APIFY_TOKEN`):** the whole T2 fleet — Reddit/X/TikTok/IG/YouTube/Twitch/Kick at
-scale with residential proxies. `apify.py` REGISTRY is the single place actor ids live.
+**5. The `collect_gateway` from Phase 1 is the spine that orders all of the above.** Build `research_engine/collect_gateway.py` + `research_engine/sources.py` as specified in `BUILD-PLAN-PHASE1.md`, and express every route above as an ordered `Route` in each `SourceSpec.intents` — `api` (YouTube/Twitch/Reddit-OAuth) → `apify` (residential) → `fingerprint` (curl_cffi → patchright) → `session` (extension) → `manual`. The gateway walks them until one satisfies its `requires` contract and passes `resolve_field_states`, so the acquisition ladder in Section 2 is *data in the registry*, not logic scattered across connectors. `apify.py` already prototypes half of this (registry + windows + numeric extraction); the gateway generalizes it to every route, free and paid. Existing connectors (`twitch.py`, `discord.py`, `press.py`, the Reddit/kick/reader paths) become thin `run_route` fetchers the gateway calls. Extend `patterns.detect_uniform_zero` to null/empty/`view_count=1`/`-1` so it feeds `resolve_field_states` uniformly.
 
-**To build (in priority order):**
-1. **Phase-1 gateway** (`collect_gateway.py` + `sources.py`) — routes every acquisition through the
-   fallback chain + three-state model, so *no* connector can dead-end or fake-0. Highest leverage.
-2. **Residential-proxy rotation on the T1 direct paths** — so the free internal-endpoint hits (Reddit,
-   Kick) survive datacenter-IP blocks at volume, not just one-off.
-3. **Authed accelerators** where they add precision — Twitch Helix, TikTok Creative Center — behind tier
-   labels, never as the required path.
-4. **Breadth** (Phase 3) — each new source is a `sources.py` entry (actor/endpoint + contract +
-   fallback + tier) and inherits all of the above for free.
+**Net:** additions #1–#3 make the *default paid rungs* actually return real numbers at scale; #4 covers the private tail; #5 orders them so the engine never dead-ends. None of it is greenfield — it is wiring the proxy flag, extending one registry, generalizing one fingerprint function, promoting one extension surface, and building the one gateway the plan already specifies.
 
-## Bottom line
-The numbers are public; the skill is acquisition, and Oyster already does the three things that make
-acquisition reliable — real-browser fingerprinting, a managed proxy/scraper fleet, and server-side
-rendering. Kick, Discord, Twitch, and Reddit prove it *free and live today*; one key turns on the rest
-at scale. What's left is routing it all through one gateway so the honesty (never a fake 0, never a bare
-"couldn't get it") is structural, not hoped-for.
+## 5. The honest ceiling and the cost
+
+No one gets a clean, complete, real-time census of public engagement cheaply — and we will not pretend to. Stated plainly:
+
+**What is permanently unavailable, on every platform, at any price** (these are `not_applicable`, omitted with a reason, never a `0`): owner-only analytics — impressions, reach, watch-time, completion/retention, saves, audience demographics — because they live in the creator's dashboard and are never rendered on a public surface. Plus the platform-specific structural gaps: Reddit views and shares and the raw up/down split; YouTube dislikes and shares; Instagram saves and sends; Facebook non-video impressions; Discord views/shares/upvotes (they don't exist); article pageviews (first-party GA4 only).
+
+**What is obtainable but imperfect** (these carry a caveat, not a false precision): counts are **rounded** on TikTok/YouTube/Instagram likes; **fuzzed** on Reddit; **approximate and FB-weighted** for editorial URLs; **snapshots**, so any trend or velocity requires Oyster to re-poll on a schedule and store its own timeseries — there is no historical series to backfill from a cold URL. Some fields undercount (scraped FB comments, X `views.count` on old tweets), and a few carry sentinels we must catch (TikTok `view_count=1`, Snapchat `viewCount=-1`) rather than score.
+
+**What it costs** (2026, verified): the free rungs are free — YouTube Data API, Twitch Helix, Discord invite counts, RSS, and the syndication tweet endpoint. The paid rungs price roughly as: residential proxy **~$2.20–8.40/GB** (Decodo cheaper, Bright Data premium); mobile far more, **~$50–300/port/month**; managed Apify social actors **~$1.50–1.70/1k results**; unblocker/scraper APIs **~$0.13/1k** unrendered to **~$1/1k** rendered; twitterapi.io **~$0.15/1k** tweets; ScrapeCreators credit-priced. The enterprise official tiers we deliberately avoid: X Enterprise **~$42k+/month**, Reddit commercial **~$12k/month** floor. A soft-target scrape is fractions of a cent; a HUMAN/DataDome-protected target behind mobile IPs and a real browser can be 100× that.
+
+**The maintenance tax is real and continuous.** Instagram rotates `doc_id` and TikTok churns `X-Bogus`/`X-Gorgon`/`X-Argus` on a **2–4 week** cadence, breaking any in-house scraper. This is precisely why the default for the hard platforms is the managed rung — we pay per result to make a vendor absorb the breakage, and keep the self-host `patchright` lane only as an independence fallback. The legal ceiling is equally firm: everything defensible is **logged-out and public** (*Meta v. Bright Data*, *hiQ v. LinkedIn*); the moment a route logs in, accepts ToS, or collects EU personal data, exposure rises — which is why the Discord self-bot and reaction-level tiers are explicit, opt-in, ToS-flagged escalations, never defaults, and why we prefer aggregate counts over who-reacted PII everywhere.
+
+**The honest punchline, in the Oyster voice:** the acquisition engine is a *portfolio plus a maintenance budget*, not a single clever trick — free official APIs where they're real, a rented internal-endpoint capture layer where they aren't, the user's own session for the private tail, and an honest labelled state when a door is genuinely closed. Its guarantee is not "we get everything." It is stronger and truer: **for every field the user asks about, Oyster returns either the real number with its receipts, or the exact reason it can't — and never a fake `0` in between.**
