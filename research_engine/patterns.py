@@ -203,13 +203,114 @@ def assess_sufficiency(evidence: list[dict[str, Any]], group_by: str = "source_t
     }
 
 
+# --- consensus weighting (signal at scale) -----------------------------------
+# The unit of evidence isn't a comment — it's a comment × the people behind it. A 1k-upvote comment
+# is a poll result, not an anecdote. Different engagement types carry different conviction:
+#   shares/reposts — the strongest (you put your own name on it)
+#   upvotes/likes  — endorsement, the core agreement signal
+#   comments       — effort/depth (ambiguous sentiment, so weighted modestly)
+#   views          — reach, not conviction (dampened: huge, cheap)
+#   dislikes       — disagreement (subtracts)
+# Engagement lands in metadata inconsistently (metadata.metrics for Apify/X/kick, metadata.record
+# for raw Apify, and TOP-LEVEL keys like 'upvotes'/'num_comments' for the Reddit path). engagement_of
+# reads all of them so the free path's Reddit signal is never silently dropped.
+_ENGAGEMENT_ALIASES: dict[str, tuple[str, ...]] = {
+    "upvotes": ("upvotes", "score", "ups", "upvotecount", "likes", "like_count", "likecount",
+                "diggcount", "favoritecount", "favorite_count", "reactionscount", "heartcount"),
+    "comments": ("comments", "num_comments", "comment_count", "commentcount", "commentscount",
+                 "reply_count", "replycount", "replies"),
+    "shares": ("shares", "sharecount", "retweetcount", "retweet_count", "reposts", "repostcount",
+               "quotecount", "quote_count", "collectcount"),
+    "views": ("views", "viewcount", "view_count", "videoviewcount", "playcount", "plays",
+              "impressions", "impressioncount", "impression_count"),
+    "dislikes": ("dislikes", "downvotes", "dislikecount", "downvotecount"),
+}
+# How much each signal counts toward "the crowd agrees." Views are handled separately (sqrt-damped).
+_CONVICTION: dict[str, float] = {"upvotes": 1.0, "comments": 0.5, "shares": 3.0, "dislikes": -1.5}
+
+
+def engagement_of(row: dict[str, Any]) -> dict[str, float]:
+    """Every engagement signal on one evidence row, from wherever the connector stashed it:
+    metadata.metrics, metadata.record (raw actor row), or top-level metadata keys (the Reddit path).
+    Returns raw counts keyed by normalized signal (upvotes/comments/shares/views/dislikes)."""
+    meta = row.get("metadata") or {}
+    pools: list[dict[str, Any]] = []
+    for candidate in (meta.get("metrics"), meta.get("record"), meta):
+        if isinstance(candidate, dict):
+            pools.append(candidate)
+    flat: dict[str, float] = {}
+    for pool in pools:
+        for k, v in pool.items():
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                continue
+            flat.setdefault(str(k).lower(), float(v))
+    out: dict[str, float] = {}
+    for signal, aliases in _ENGAGEMENT_ALIASES.items():
+        for alias in aliases:
+            if alias in flat:
+                out[signal] = flat[alias]
+                break
+    return out
+
+
+def _conviction_score(sums: dict[str, float]) -> float:
+    """Composite RANK score from raw signal sums. Endorsement counts near-linearly (a 1k-upvote
+    comment really is ~1000 people); shares count most; comments modestly; views only sqrt-damped
+    (reach, not conviction); dislikes subtract. The raw per-signal sums carry the narrative."""
+    import math
+    score = sum(coeff * sums.get(sig, 0.0) for sig, coeff in _CONVICTION.items())
+    score += 2.0 * math.sqrt(max(sums.get("views", 0.0), 0.0))
+    return round(score, 2)
+
+
+def weighted_consensus(evidence: list[dict[str, Any]], group_by: str = "source_type",
+                       limit: int = 12) -> dict[str, Any]:
+    """Rank what the crowd actually ENDORSES, not how often it was mentioned. Per group, sum each
+    engagement signal and compute a conviction weight; return groups ranked by weight with the raw
+    sums for the narrative ('4,300 upvotes across 8 threads'). Signal at scale: one high-endorsement
+    datapoint can outrank twenty obscure ones. Normalization note: raw counts favour big communities
+    and older posts — treat as a strong-but-imperfect consensus proxy, not gospel."""
+    groups: dict[str, dict[str, float]] = {}
+    counts: dict[str, int] = {}
+    endorsed = 0
+    for row in evidence:
+        eng = engagement_of(row)
+        agg = groups.setdefault(_group_of(row, group_by), {})
+        for signal, val in eng.items():
+            agg[signal] = agg.get(signal, 0.0) + val
+        counts[_group_of(row, group_by)] = counts.get(_group_of(row, group_by), 0) + 1
+        if any(eng.get(s, 0) for s in ("upvotes", "shares", "comments", "views")):
+            endorsed += 1
+    ranked = []
+    for g, sums in groups.items():
+        ranked.append({
+            "group": g, "items": counts[g],
+            "upvotes": int(sums.get("upvotes", 0)), "comments": int(sums.get("comments", 0)),
+            "shares": int(sums.get("shares", 0)), "views": int(sums.get("views", 0)),
+            "dislikes": int(sums.get("dislikes", 0)), "weight": _conviction_score(sums),
+        })
+    ranked.sort(key=lambda r: r["weight"], reverse=True)
+    return {
+        "group_by": group_by,
+        "rows_with_engagement": endorsed, "rows_total": len(evidence),
+        "total_endorsement": {k: sum(r[k] for r in ranked) for k in ("upvotes", "comments", "shares", "views")},
+        "ranked": ranked[:limit],
+        "note": ("Ranked by conviction weight (shares>upvotes>comments; views sqrt-damped; dislikes "
+                 "subtract), NOT mention count. Lead the report with the highest-endorsement findings "
+                 "and cite the weight (e.g. 'N upvotes across M threads'). Raw counts favour large "
+                 "communities/older posts — a strong but imperfect consensus proxy."),
+    }
+
+
 def analyze_chatter(evidence: list[dict[str, Any]], salt: str = "",
                     group_by: str = "source_type") -> dict[str, Any]:
     """One call for the whole credibility layer over a job's evidence: anonymized top voices,
-    recurring terms/phrases, per-group breakdown, signal ratio, and the sufficiency verdict."""
+    recurring terms/phrases, per-group breakdown, signal ratio, the sufficiency verdict, and the
+    consensus weighting (what the crowd most endorses, by engagement — not mention count)."""
     return {
         "sufficiency": assess_sufficiency(evidence, group_by=group_by),
         "signal": signal_ratio(evidence),
+        "consensus": weighted_consensus(evidence, group_by=group_by),
         "top_terms": top_terms(evidence),
         "top_voices": top_voices(evidence, salt=salt),
         "by_group": by_group(evidence, group_by),

@@ -208,6 +208,13 @@ def synth_prompt(state: ResearchState, final: bool = False) -> str:
         "• themes: each TITLE is an ACTION TITLE — the takeaway as a sentence ('Charging, not range, "
         "decides the purchase'), never a topic label. insight = 2-3 plain sentences + the 'so what'. "
         "Break up text; no walls of paragraphs. Back each with a real QUOTE + its specific source URL.",
+        "• WEIGHT BY CONSENSUS, not mention count: a comment/post is worth the people behind it — a "
+        "1k-upvote comment is ~1000 people agreeing, not one voice. analyze_chatter returns a "
+        "'consensus' ranking (aggregate upvotes/shares/comments per group, views sqrt-damped, dislikes "
+        "subtract) and each evidence row carries its 'engagement'. LEAD with the highest-endorsement "
+        "findings and cite the weight in plain words ('the top complaint, ~4,300 upvotes across 8 "
+        "threads'). A single high-endorsement datapoint can outrank many obscure ones. Treat counts as "
+        "a strong-but-imperfect proxy (big communities/old posts inflate) — don't overclaim precision.",
         "• numbered_sources: the [n] bibliography — {n, label, url (SPECIFIC deep link), tool} — every "
         "quote's source appears; reference [n] in the prose.",
         "• metrics_tables: computed figures from compute_metric / analyze_chatter (never hand-typed); "

@@ -10,6 +10,43 @@ def _msg(text, author="a", source="kick_chat", channel="xqc"):
             "metadata": {"channel": channel}}
 
 
+class ConsensusWeightingTests(unittest.TestCase):
+    """Weight evidence by the people behind it, not by mention count. A 1k-upvote comment is a poll,
+    not an anecdote."""
+
+    def test_engagement_read_from_every_metadata_shape(self):
+        reddit = {"metadata": {"upvotes": 1200, "num_comments": 340}}          # top-level (Reddit path)
+        apify_metrics = {"metadata": {"metrics": {"likes": 50, "shares": 9}}}  # metrics dict
+        apify_record = {"metadata": {"record": {"playCount": 90000, "diggCount": 800}}}  # raw actor row
+        self.assertEqual(patterns.engagement_of(reddit)["upvotes"], 1200)
+        self.assertEqual(patterns.engagement_of(reddit)["comments"], 340)
+        self.assertEqual(patterns.engagement_of(apify_metrics)["upvotes"], 50)   # likes -> upvotes
+        self.assertEqual(patterns.engagement_of(apify_metrics)["shares"], 9)
+        self.assertEqual(patterns.engagement_of(apify_record)["views"], 90000)
+        self.assertEqual(patterns.engagement_of(apify_record)["upvotes"], 800)   # diggCount -> upvotes
+
+    def test_one_high_endorsement_row_outranks_many_obscure_ones(self):
+        ev = [{"source_type": "reddit", "metadata": {"upvotes": 2000}}]
+        ev += [{"source_type": "web", "metadata": {"upvotes": 5}} for _ in range(20)]
+        c = patterns.weighted_consensus(ev, group_by="source_type")
+        self.assertEqual(c["ranked"][0]["group"], "reddit")          # the 2k-upvote voice leads
+        self.assertGreater(c["ranked"][0]["weight"], c["ranked"][1]["weight"])
+        self.assertEqual(c["total_endorsement"]["upvotes"], 2100)
+
+    def test_shares_outweigh_upvotes_and_dislikes_subtract(self):
+        shares = patterns._conviction_score({"shares": 100})
+        upvotes = patterns._conviction_score({"upvotes": 100})
+        self.assertGreater(shares, upvotes)                          # a share is stronger than an upvote
+        self.assertLess(patterns._conviction_score({"upvotes": 100, "dislikes": 100}),
+                        patterns._conviction_score({"upvotes": 100}))  # dislikes pull it down
+
+    def test_views_are_dampened_not_dominant(self):
+        # 1,000,000 views should NOT swamp a solid upvote signal the way linear counting would
+        views = patterns._conviction_score({"views": 1_000_000})
+        upvotes = patterns._conviction_score({"upvotes": 5000})
+        self.assertLess(views, upvotes)
+
+
 class AnonymizeTests(unittest.TestCase):
     def test_pseudonym_is_stable_and_hides_handle(self):
         p1 = patterns.pseudonymize("BigStreamerFan", salt="job7")

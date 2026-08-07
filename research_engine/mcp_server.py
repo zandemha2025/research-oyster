@@ -312,6 +312,13 @@ def _compact_evidence_row(r: dict[str, Any], excerpt_len: int = 280) -> dict[str
             slim[k] = meta[k]
     if isinstance(meta.get("metrics"), dict) and meta["metrics"]:
         slim["metrics"] = meta["metrics"]
+    # Normalized engagement (upvotes/comments/shares/views) from wherever the connector stashed it —
+    # the Reddit path keeps it as top-level keys that the trim above would drop. The synthesis needs
+    # this to weight findings by consensus (a 1k-upvote comment ≠ an obscure one), not mention count.
+    from research_engine import patterns as _patterns
+    engagement = _patterns.engagement_of(r)
+    if engagement:
+        slim["engagement"] = {k: int(v) for k, v in engagement.items()}
     return {"id": r.get("id"), "source_type": r.get("source_type"), "author": r.get("author"),
             "url": r.get("url"), "title": (r.get("title") or "")[:120],
             "excerpt": (r.get("excerpt") or "")[:excerpt_len], "meta": slim}
