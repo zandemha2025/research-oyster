@@ -227,6 +227,31 @@ def _stop_mcp_server() -> None:
     _mcp_proc = None
 
 
+def _reap_orphan_mcp() -> None:
+    """A previous Studio killed with SIGTERM skips atexit, orphaning its MCP server on the shared
+    port. The new Studio would then REUSE that orphan and run STALE code — old report templates, old
+    connectors — even after a git pull. Reap any stray mcp_server at startup so we always spawn one
+    on the CURRENT code. Linux /proc based; a no-op elsewhere (a fresh machine has no orphan anyway).
+    """
+    import glob
+    import signal
+    for cmdline in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            parts = open(cmdline, "rb").read().split(b"\0")
+        except OSError:
+            continue
+        if any(b"research_engine.mcp_server" in p for p in parts):
+            try:
+                pid = int(cmdline.split("/")[2])
+            except (ValueError, IndexError):
+                continue
+            if pid != os.getpid():
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
+
 def _agent_options(resume: str | None, system_prompt: str = SYSTEM_PROMPT) -> csdk.ClaudeAgentOptions:
     ensure_mcp_server()
     return csdk.ClaudeAgentOptions(
@@ -696,6 +721,10 @@ def main() -> None:
               f"  It's probably already running — open http://127.0.0.1:{STUDIO_PORT}/ in your browser.\n"
               f"  (To stop the old one: pkill -f research_engine.studio, then run ./studio again.)\n")
         raise SystemExit(1)
+
+    # We own the Studio port, so we're the single Studio instance — reap any orphaned MCP server
+    # from a previously-killed Studio so this run's collection/export uses the current code.
+    _reap_orphan_mcp()
 
     url = f"http://127.0.0.1:{STUDIO_PORT}/"
     print(f"Research Oyster Studio is open at {url}")
