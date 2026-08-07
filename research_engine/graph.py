@@ -191,9 +191,11 @@ def verify_prompt(state: ResearchState) -> str:
 
 def synth_prompt(state: ResearchState, final: bool = False) -> str:
     parts = [
-        f"SYNTHESIZE step for job {state.job_id}. First call get_research_dossier({state.job_id}) to see all "
-        f"evidence, the computed metrics, the verification notes, and the source_runs ledger. Then call "
-        f"write_research_synthesis to author a CONSULTANT-GRADE, RESULTS-FIRST answer:",
+        f"SYNTHESIZE step for job {state.job_id}. Work ONLY through the research tools — do not write "
+        f"code, run shells, or spawn sub-agents; you already have everything you need. First call "
+        f"get_research_dossier({state.job_id}) (a compact, readable view) to see the evidence, coverage, "
+        f"and source_runs ledger, and call compute_metric / compute_rate / analyze_chatter for numbers over "
+        f"ALL rows. Then call write_research_synthesis to author a CONSULTANT-GRADE, RESULTS-FIRST answer:",
         "• LEAD WITH THE ANSWER AND THE NUMBERS. executive_answer directly answers the brief and puts the key "
         "computed figures in it (with n). point_of_view states a sharp thesis — take a position, and disagree "
         "with the brief's framing if the evidence warrants.",

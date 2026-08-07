@@ -238,6 +238,12 @@ def _agent_options(resume: str | None, system_prompt: str = SYSTEM_PROMPT) -> cs
                 "url": MCP_HTTP_URL,  # one shared server; see ensure_mcp_server above
             }
         },
+        # Hard-remove the general-purpose tools from what the model can even see. Denying them via
+        # can_use_tool wasn't enough — the model kept *trying* Bash/Agent/ToolSearch/Write to
+        # "analyze the data" and burned whole turns getting denied instead of calling the research
+        # tools + write_research_synthesis. Not advertising them forces the intended path.
+        disallowed_tools=["Bash", "Task", "Agent", "ToolSearch", "Write", "Edit",
+                          "NotebookEdit", "KillShell", "BashOutput"],
         can_use_tool=_allow_research_tools,
         permission_mode="default",  # bypassPermissions is blocked when running as root
         resume=resume,
