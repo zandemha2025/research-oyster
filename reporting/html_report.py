@@ -85,6 +85,11 @@ def build_html(title: str, synthesis: dict[str, Any], themes: list[dict[str, Any
         parts.append(f'<section class="pov"><div class="pov-label">Our point of view</div>'
                      f'<p>{_esc(s["point_of_view"])}</p></section>')
 
+    if s.get("key_takeaways"):
+        items = "".join(f"<li>{_esc(t)}</li>" for t in s["key_takeaways"])
+        parts.append(f'<section><div class="glance"><div class="glance-label">At a glance</div>'
+                     f'<ul>{items}</ul></div></section>')
+
     if s.get("executive_answer"):
         parts.append(f'<section><h2>Executive answer</h2><p class="lede">{_esc(s["executive_answer"])}</p>'
                      f'{_stat_tiles(tables, raw_tables)}</section>')
@@ -170,6 +175,15 @@ _PAGE = """<!doctype html>
     text-transform:uppercase;margin-bottom:8px}}
   .pov p{{font-size:22px;line-height:1.4;font-weight:600;margin:0;color:var(--ink)}}
   .lede{{font-size:17px}}
+  .glance{{background:#fff;border:1px solid var(--grid);border-top:4px solid var(--accent);
+    border-radius:8px;padding:20px 24px;margin:20px 0 6px;box-shadow:0 1px 8px rgba(0,0,0,.05)}}
+  .glance-label{{color:var(--accent);font-weight:700;font-size:12px;letter-spacing:.12em;
+    text-transform:uppercase;margin-bottom:10px}}
+  .glance ul{{margin:0;padding-left:0;list-style:none}}
+  .glance li{{position:relative;padding:7px 0 7px 26px;font-size:15.5px;font-weight:600;
+    border-bottom:1px solid #f0eee8}}
+  .glance li:last-child{{border-bottom:none}}
+  .glance li:before{{content:"→";position:absolute;left:0;color:var(--accent);font-weight:800}}
   .tiles{{display:flex;gap:14px;margin:22px 0 6px;flex-wrap:wrap}}
   .tile{{flex:1;min-width:150px;background:var(--panel);border-radius:8px;padding:20px 16px;text-align:center}}
   .tile-num{{font-size:34px;font-weight:800;color:var(--accent);line-height:1}}

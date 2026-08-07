@@ -5,6 +5,9 @@ _Research Oyster · {{ generated_at }} · job #{{ job.id }} · drawn from {{ evi
 {% if synthesis.point_of_view %}## Our point of view
 {{ synthesis.point_of_view }}
 
+{% endif %}{% if synthesis.key_takeaways %}## At a glance
+{% for t in synthesis.key_takeaways %}- **{{ t | cell }}**
+{% endfor %}
 {% endif %}## Executive answer
 {{ synthesis.executive_answer }}
 {% if metrics_tables %}

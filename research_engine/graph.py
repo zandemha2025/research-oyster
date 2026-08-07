@@ -196,25 +196,25 @@ def synth_prompt(state: ResearchState, final: bool = False) -> str:
         f"get_research_dossier({state.job_id}) to see the evidence, coverage, and source_runs ledger, and call "
         f"compute_metric / compute_rate / analyze_chatter for numbers over ALL rows. Then call "
         f"write_research_synthesis to author the report.",
-        "WRITE LIKE A CONSULTANT BRIEFING AN EXECUTIVE, not an academic. The reader wants the answer, not a "
-        "statistics lesson. Rules of voice:",
-        "• Lead with the answer and a sharp point_of_view — take a position, disagree with the brief if the "
-        "evidence warrants. Confident, plain, declarative prose.",
-        "• Weave numbers into sentences NATURALLY: 'Delta Force runs 18 live squad-finding voice channels — the "
-        "only game in the set with any' — NOT 'active_voice_channels=18, n=13'. NEVER write 'n=' or expose "
-        "field names or sample-size notation in the narrative. The rigor lives under the hood.",
-        "• point_of_view / executive_answer / themes / tensions / recommendations are the story. Each theme is "
-        "backed by a real QUOTE with its specific source URL (the exact thread/article/page, never a homepage).",
-        "• Put every claim's traceable source in numbered_sources as [n] — {n, label, url (the SPECIFIC deep "
-        "link), tool, note} — and reference [n] in the prose. This is the bibliography; it must be complete.",
-        "• metrics_tables still carry the computed figures (tables may show counts), built from compute_metric / "
-        "analyze_chatter — never hand-typed. Give each a plain-English title, not a formula.",
-        "• method: ONE short section, in plain language, on how you got the findings (what you read, what you "
-        "counted, any cross-check) — skippable, not the headline. confidence: plain-English how sure and why "
-        "(you may say 'based on a modest sample' but not 'n=12').",
-        "• ANONYMIZE speakers — pseudonyms (user_xxxx) from analyze_chatter, never a real handle.",
-        "• If a source was blocked, ROUTE AROUND IT and give it ONE closing line — limitations are a short "
-        "caveat, never the headline. Never fabricate.",
+        "WRITE LIKE A McKINSEY/BCG CONSULTANT briefing a busy executive — answer first, scannable, "
+        "plain. The reader must get it at a glance and never feel talked down to or sent in circles.",
+        "• VOICE: plain, confident, concrete. Short sentences. NEVER use a big word where a simple one "
+        "works, and NO jargon for its own sake ('squad-cosmetics flywheel', 'structural incentive "
+        "asymmetry' = bad writing). Weave numbers in naturally — NEVER write 'n=' or expose field names.",
+        "• point_of_view: a sharp 1-2 sentence thesis (a position; may disagree with the brief), NOT a "
+        "paragraph. executive_answer: 2-4 tight sentences.",
+        "• key_takeaways: REQUIRED — 3-5 one-line scannable takeaways for the 'at a glance' box, each a "
+        "complete finding ('Charging reliability is the #1 complaint, ~2x louder than range').",
+        "• themes: each TITLE is an ACTION TITLE — the takeaway as a sentence ('Charging, not range, "
+        "decides the purchase'), never a topic label. insight = 2-3 plain sentences + the 'so what'. "
+        "Break up text; no walls of paragraphs. Back each with a real QUOTE + its specific source URL.",
+        "• numbered_sources: the [n] bibliography — {n, label, url (SPECIFIC deep link), tool} — every "
+        "quote's source appears; reference [n] in the prose.",
+        "• metrics_tables: computed figures from compute_metric / analyze_chatter (never hand-typed); "
+        "plain-English titles. method: ONE short plain section on how you got the findings (skippable). "
+        "confidence: plain-English ('based on a modest sample', not 'n=12').",
+        "• ANONYMIZE speakers (user_xxxx). If a source was blocked, route around it and give it ONE "
+        "closing line — limitations are a short caveat, never the headline. Never fabricate.",
     ]
     if state.named_platforms:
         parts.append(

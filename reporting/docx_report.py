@@ -89,6 +89,15 @@ def build_docx(job: dict[str, Any], synthesis: dict[str, Any], generated_at: str
         _heading(doc, "Our point of view", level=2)
         _para(doc, synthesis["point_of_view"], size=12, bold=True)
 
+    if synthesis.get("key_takeaways"):
+        _heading(doc, "At a glance", level=2)
+        for t in synthesis["key_takeaways"]:
+            p = doc.add_paragraph(style="List Bullet")
+            run = p.add_run(str(t))
+            run.font.size = Pt(11)
+            run.font.bold = True
+            run.font.name = theme.FONT
+
     _heading(doc, "Executive answer", level=2)
     _para(doc, synthesis.get("executive_answer") or "—")
 

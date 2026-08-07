@@ -423,6 +423,7 @@ def write_research_synthesis(
     job_id: int,
     executive_answer: str,
     point_of_view: str = "",
+    key_takeaways: list[str] | None = None,
     themes: list[dict[str, Any]] | None = None,
     metrics_tables: list[dict[str, Any]] | None = None,
     method: str = "",
@@ -435,17 +436,26 @@ def write_research_synthesis(
 ) -> dict[str, Any]:
     """Author the report that answers the question, and persist it as the job's deliverable.
 
-    Write like a consultant briefing an executive, NOT an academic. The reader wants the answer,
-    not a statistics lesson. Lead with the position, weave numbers into prose naturally, and demote
-    what you couldn't get to one short closing line. Thin evidence still gets a synthesis, honestly.
+    Write like a McKinsey/BCG consultant briefing a busy executive. The reader must get the answer
+    at a glance and never feel talked-down-to or sent in circles. Follow the method:
 
-    - executive_answer: 2-5 sentences that directly answer the brief, with the key figures woven in
-      as plain language ("Delta Force runs 18 live squad-finding voice channels — the only game in
-      the set with any"). NEVER write "n=22" or expose field names / sample-size notation. Required.
-    - point_of_view: the headline POSITION — a sharp, decision-ready thesis that may disagree with
-      the brief's framing. This is what separates a consultant report from a summary.
-    - themes: list of {"title", "insight", "citations": [{"quote", "url", "source"}]} — each key
-      finding backed by a real QUOTE with its SPECIFIC source URL (the exact thread/article/page,
+    VOICE — plain, confident, concrete. Short sentences. NEVER use a big word where a simple one
+    works, and never jargon for its own sake ("squad-cosmetics flywheel", "structural incentive
+    asymmetry" = bad). If a term is unavoidable, explain it in five plain words. NEVER write "n=22"
+    or expose field names. Numbers go into prose naturally.
+    STRUCTURE — answer first (pyramid). Every heading is an ACTION TITLE stating the takeaway, not
+    the topic ("Charging, not range, decides the purchase" — not "Charging complaints"). Keep
+    paragraphs to 2-3 sentences; break with bolded lead-ins. No walls of text.
+
+    - executive_answer: 2-4 tight sentences answering the brief, key figures woven in plainly. Required.
+    - point_of_view: the headline POSITION in 1-2 sentences — sharp, decision-ready, may disagree
+      with the brief. Not a paragraph; a thesis.
+    - key_takeaways: 3-5 ONE-LINE, scannable takeaways — the "at a glance" box a reader can absorb
+      in 20 seconds. Each is a complete finding with its number, not a topic ("Charging reliability
+      is the #1 complaint, ~2x louder than range"). This is required for scannability.
+    - themes: list of {"title", "insight", "citations": [{"quote","url","source"}]}. The TITLE is an
+      action title (the takeaway as a sentence). insight is 2-3 plain sentences + the "so what" for
+      the decision. Each backed by a real QUOTE with its SPECIFIC source URL (exact thread/article,
       never a homepage). Reference sources by [n]. Quote what people actually said.
     - metrics_tables: the computed numbers, structured. Each: {"title" (plain English, not a
       formula), "unit", "group_by", "rows": [{"group", ...}], "note"}. Build from compute_metric /
@@ -469,6 +479,7 @@ def write_research_synthesis(
     synthesis = {
         "executive_answer": executive_answer.strip(),
         "point_of_view": point_of_view.strip(),
+        "key_takeaways": [t.strip() for t in (key_takeaways or []) if t and t.strip()],
         "themes": themes or [],
         "metrics_tables": metrics_tables or [],
         "method": method.strip(),
