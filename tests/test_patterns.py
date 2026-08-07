@@ -46,6 +46,24 @@ class ConsensusWeightingTests(unittest.TestCase):
         upvotes = patterns._conviction_score({"upvotes": 5000})
         self.assertLess(views, upvotes)
 
+    def test_uniform_zero_field_flagged_as_tooling_artifact(self):
+        # The SGF 2026 signature: a scraper returns comment counts but score=0 for the whole batch.
+        ev = [{"source_type": "reddit", "metadata": {"upvotes": 0, "num_comments": 40 + i}}
+              for i in range(6)]
+        suspects = patterns.detect_uniform_zero(ev)
+        self.assertTrue(any(s["field"] == "upvotes" and s["platform"] == "reddit" for s in suspects))
+        # and the consensus surfaces it with a warning + a suspect_fields list
+        c = patterns.weighted_consensus(ev, group_by="source_type")
+        self.assertTrue(c["suspect_fields"])
+        self.assertIn("DATA-QUALITY WARNING", c["note"])
+
+    def test_genuine_engagement_is_not_flagged(self):
+        # Real upvotes present -> no false alarm
+        ev = [{"source_type": "reddit", "metadata": {"upvotes": 100 + i, "num_comments": 5}}
+              for i in range(6)]
+        self.assertEqual(patterns.detect_uniform_zero(ev), [])
+        self.assertEqual(patterns.weighted_consensus(ev)["suspect_fields"], [])
+
 
 class AnonymizeTests(unittest.TestCase):
     def test_pseudonym_is_stable_and_hides_handle(self):

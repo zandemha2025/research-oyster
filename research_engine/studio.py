@@ -570,30 +570,50 @@ async def report(request: Request) -> HTMLResponse:
     if not html_path.exists():
         try:
             export_job(store, job_id, Settings().output_dir)
-        except Exception:
-            # The report isn't ready yet (the run is still working, or it finished without a
-            # synthesis). Show the human a calm placeholder — never a tool name or a stack trace.
-            # 200, not an error code, so an open Report tab doesn't log a console error mid-run;
-            # loadReport re-fetches with a cache-buster and swaps in the real report the moment
-            # it lands.
-            return HTMLResponse(_report_pending_page(), status_code=200)
+        except Exception as exc:
+            # Distinguish "still running / no synthesis yet" from "the research FINISHED but building
+            # the report files failed." The first is a calm 'being prepared' page; the second must be
+            # honest — never mask a real export failure as 'still running' (that leaves the user
+            # waiting forever for a report that already exists as an answer).
+            try:
+                has_answer = bool((store.dossier(job_id).get("synthesis") or {}).get("executive_answer"))
+            except Exception:
+                has_answer = False
+            page = _report_export_failed_page(exc) if has_answer else _report_pending_page()
+            return HTMLResponse(page, status_code=200)
     return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
 
-def _report_pending_page() -> str:
-    """A quiet, on-brand 'your report is on its way' page shown while a run is still working."""
+def _report_shell(emoji: str, heading: str, body: str) -> str:
     return (
         "<!doctype html><meta charset='utf-8'>"
         "<div style=\"font-family:-apple-system,Segoe UI,Roboto,sans-serif;height:100vh;"
         "display:flex;align-items:center;justify-content:center;background:#0f1420;color:#e6e9ef\">"
-        "<div style='text-align:center;max-width:34rem;padding:2rem'>"
-        "<div style='font-size:2.5rem;margin-bottom:.5rem'>🦪</div>"
-        "<h2 style='font-weight:600;margin:0 0 .5rem'>Your report is being prepared</h2>"
-        "<p style='color:#9aa3b2;line-height:1.5;margin:0'>The research is still running. "
-        "This page updates on its own — your report will appear here the moment it's ready. "
-        "Watch the Activity and Graph tabs to follow along.</p>"
+        f"<div style='text-align:center;max-width:36rem;padding:2rem'>"
+        f"<div style='font-size:2.5rem;margin-bottom:.5rem'>{emoji}</div>"
+        f"<h2 style='font-weight:600;margin:0 0 .5rem'>{heading}</h2>"
+        f"<p style='color:#9aa3b2;line-height:1.5;margin:0'>{body}</p>"
         "</div></div>"
     )
+
+
+def _report_pending_page() -> str:
+    """A quiet, on-brand 'your report is on its way' page shown while a run is still working."""
+    return _report_shell("🦪", "Your report is being prepared",
+        "The research is still running. This page updates on its own — your report will appear "
+        "here the moment it's ready. Watch the Activity and Graph tabs to follow along.")
+
+
+def _report_export_failed_page(exc: Exception) -> str:
+    """The research FINISHED (an answer is saved) but building the report files failed. Be honest —
+    don't pretend it's 'still running' — without dumping a stack trace. Almost always a missing
+    optional dependency (e.g. matplotlib for charts); updating/reinstalling fixes it."""
+    reason = (str(exc) or type(exc).__name__)[:180]
+    return _report_shell("🛠️", "Your answer is ready — the file build hit a snag",
+        "The research finished and the answer is saved, but assembling the report files failed. "
+        "This is almost always a missing optional dependency — update to the latest version (or "
+        "reinstall) and reopen this report. "
+        f"<br><br><small style='color:#6b7280'>{reason}</small>")
 
 
 # Deliverable files the report pane offers for download, in the order shown. Anything not present

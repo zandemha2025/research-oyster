@@ -16,10 +16,15 @@ import re
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg")  # no display in a server/subprocess
-import matplotlib.pyplot as plt  # noqa: E402
+# matplotlib is OPTIONAL. If it's missing, charts are skipped and the rest of the package
+# (report.md/.html/.docx, deck text, Sources, raw-data) still ships — a missing chart library must
+# never take down the whole export. Import lazily so `from reporting import charts` always succeeds.
+try:
+    import matplotlib
+    matplotlib.use("Agg")  # no display in a server/subprocess
+    import matplotlib.pyplot as plt
+except Exception:  # noqa: BLE001 — any import/backend failure: degrade to no-charts
+    plt = None
 
 from reporting import theme  # noqa: E402
 
@@ -65,6 +70,8 @@ def render_metric_chart(table: dict[str, Any], path_png: Path) -> Path | None:
     labelled with its value (and n when present)."""
     from reporting.tables import chart_series
 
+    if plt is None:  # matplotlib not installed — skip charts, the rest of the package still ships
+        return None
     series = chart_series(table)
     if not series:
         return None

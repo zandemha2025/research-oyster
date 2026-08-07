@@ -263,6 +263,35 @@ def _conviction_score(sums: dict[str, float]) -> float:
     return round(score, 2)
 
 
+def detect_uniform_zero(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flag an engagement field that is UNIFORMLY ZERO across a whole platform batch while OTHER
+    engagement on the same rows is non-zero. That is the signature of a collection/tooling limitation
+    — e.g. a Reddit scraper that returns posts + comment counts fine but score=0 for every row —
+    NOT a genuine zero. Checks the WHOLE batch (a sample can't catch a uniform failure), distinguishes
+    'tool didn't return it' from 'really zero' (the latter would have no other signal either), and
+    lets the consensus refuse to weight it. Returns [] when engagement looks trustworthy."""
+    by_platform: dict[str, list[dict[str, float]]] = {}
+    for row in evidence:
+        eng = engagement_of(row)
+        if eng:  # only rows that carry SOME engagement metadata are in scope
+            by_platform.setdefault(_group_of(row, "source_type"), []).append(eng)
+    suspects: list[dict[str, Any]] = []
+    for platform, rows in by_platform.items():
+        # the batch clearly collected *something* (a genuinely dead field would have no signal at all)
+        has_other_signal = any(any(r.get(s, 0) for s in ("upvotes", "comments", "shares", "views")) for r in rows)
+        for sig in ("upvotes", "comments", "shares", "views"):
+            vals = [r.get(sig, 0.0) for r in rows if sig in r]
+            if len(vals) >= 3 and all(v == 0 for v in vals) and has_other_signal:
+                suspects.append({
+                    "platform": platform, "field": sig, "rows": len(vals),
+                    "note": (f"'{sig}' is 0 on all {len(vals)} {platform} rows while other engagement "
+                             f"is present — the signature of a collection/tooling limitation, not a "
+                             f"real zero. Do NOT weight or report {sig} as real for {platform}; re-pull "
+                             f"with a source that returns {sig} (never impute it)."),
+                })
+    return suspects
+
+
 def weighted_consensus(evidence: list[dict[str, Any]], group_by: str = "source_type",
                        limit: int = 12) -> dict[str, Any]:
     """Rank what the crowd actually ENDORSES, not how often it was mentioned. Per group, sum each
@@ -290,15 +319,23 @@ def weighted_consensus(evidence: list[dict[str, Any]], group_by: str = "source_t
             "dislikes": int(sums.get("dislikes", 0)), "weight": _conviction_score(sums),
         })
     ranked.sort(key=lambda r: r["weight"], reverse=True)
+    suspect_fields = detect_uniform_zero(evidence)
+    note = ("Ranked by conviction weight (shares>upvotes>comments; views sqrt-damped; dislikes "
+            "subtract), NOT mention count. Lead the report with the highest-endorsement findings "
+            "and cite the weight (e.g. 'N upvotes across M threads'). Raw counts favour large "
+            "communities/older posts — a strong but imperfect consensus proxy.")
+    if suspect_fields:
+        note = ("⚠ DATA-QUALITY WARNING: " + "; ".join(s["note"] for s in suspect_fields) +
+                " Weight the consensus on the fields that ARE present (e.g. comment volume), say in "
+                "the report that the affected field was unavailable for tooling reasons, and do NOT "
+                "present its zeros as a real finding. " + note)
     return {
         "group_by": group_by,
         "rows_with_engagement": endorsed, "rows_total": len(evidence),
         "total_endorsement": {k: sum(r[k] for r in ranked) for k in ("upvotes", "comments", "shares", "views")},
         "ranked": ranked[:limit],
-        "note": ("Ranked by conviction weight (shares>upvotes>comments; views sqrt-damped; dislikes "
-                 "subtract), NOT mention count. Lead the report with the highest-endorsement findings "
-                 "and cite the weight (e.g. 'N upvotes across M threads'). Raw counts favour large "
-                 "communities/older posts — a strong but imperfect consensus proxy."),
+        "suspect_fields": suspect_fields,
+        "note": note,
     }
 
 
