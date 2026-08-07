@@ -88,7 +88,10 @@ SYSTEM_PROMPT = (
 # Tools the agent may use without prompting (this is a trusted local research context;
 # there is no human at a permission prompt behind a web request). Research happens
 # through the MCP tools + read-only web/search builtins. Editing/shell tools are denied.
-ALLOWED_BUILTINS = {"WebSearch", "WebFetch", "ToolSearch", "Read", "Glob", "Grep", "TodoWrite"}
+# Research nodes use the MCP research tools for everything; these read-only builtins are the only
+# extras. ToolSearch/Agent/Bash are deliberately NOT here — a node that goes looking for them
+# wanders (it once burned a whole synthesize turn trying Bash + a subagent instead of authoring).
+ALLOWED_BUILTINS = {"WebSearch", "WebFetch", "Read", "Glob", "Grep", "TodoWrite"}
 
 
 def _db_ok() -> bool:

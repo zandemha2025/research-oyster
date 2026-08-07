@@ -301,13 +301,71 @@ async def fetch_reddit_thread(job_id: int, url: str, max_comments: int = 40) -> 
     return await _tracked("reddit_thread", job_id, url, fetch_reddit_thread_connector(store, job_id, url, max_comments))
 
 
+def _compact_evidence_row(r: dict[str, Any], excerpt_len: int = 280) -> dict[str, Any]:
+    """One evidence row, stripped to what synthesis needs: the quote + light context. Drops the
+    heavy metadata (full API records, transcripts, link lists) that bloats the dossier."""
+    meta = r.get("metadata") or {}
+    slim: dict[str, Any] = {}
+    for k in ("entity", "channel", "query_shape", "score", "num_comments", "subreddit",
+              "category", "is_live", "widget_enabled", "member_count", "presence_count"):
+        if meta.get(k) is not None:
+            slim[k] = meta[k]
+    if isinstance(meta.get("metrics"), dict) and meta["metrics"]:
+        slim["metrics"] = meta["metrics"]
+    return {"id": r.get("id"), "source_type": r.get("source_type"), "author": r.get("author"),
+            "url": r.get("url"), "title": (r.get("title") or "")[:120],
+            "excerpt": (r.get("excerpt") or "")[:excerpt_len], "meta": slim}
+
+
+def _compact_dossier(d: dict[str, Any], max_total: int = 72, per_source: int = 14) -> dict[str, Any]:
+    """A synthesis-ready view of a job: a representative SPREAD of evidence across source types
+    with heavy metadata trimmed, plus the ledger summarized. The full raw dossier can run to
+    hundreds of thousands of tokens (many rows carry full scraped records) — too large to read in
+    one turn, which is what made the synthesize step fail. Numbers still come from compute_metric /
+    analyze_chatter, which read every row from the DB, so trimming here costs no accuracy."""
+    from collections import Counter
+
+    ev = d.get("evidence") or []
+    seen: dict[str, int] = {}
+    spread: list[dict[str, Any]] = []
+    for r in ev:
+        st = r.get("source_type") or "?"
+        if seen.get(st, 0) >= per_source:
+            continue
+        seen[st] = seen.get(st, 0) + 1
+        spread.append(_compact_evidence_row(r))
+        if len(spread) >= max_total:
+            break
+    runs = d.get("source_runs") or []
+    job = d.get("job") or {}
+    plan = job.get("plan") or {}
+    return {
+        "job": {"id": job.get("id"), "brief": job.get("brief"), "decision": job.get("decision"),
+                "questions": plan.get("questions"), "entities": plan.get("entities"),
+                "angles": plan.get("angles")},
+        "coverage": d.get("coverage"),
+        "evidence_shown": len(spread), "evidence_total": len(ev),
+        "evidence": spread,
+        "source_runs_summary": dict(Counter(x.get("outcome") for x in runs)),
+        "source_runs": [{"connector": x.get("connector"), "query": x.get("query"),
+                         "outcome": x.get("outcome"), "yield_count": x.get("yield_count"),
+                         "http_status": x.get("http_status")} for x in runs[:50]],
+        "synthesis_authored": bool((d.get("synthesis") or {}).get("executive_answer")),
+        "_note": (f"Compact view: {len(spread)} of {len(ev)} evidence rows shown (a spread across "
+                  f"sources; heavy metadata trimmed). For numbers over ALL rows call compute_metric / "
+                  f"compute_rate / analyze_chatter, then author with write_research_synthesis."),
+    }
+
+
 @mcp.tool()
 def get_research_dossier(job_id: int) -> dict[str, Any]:
-    """Return a research job with its plan, evidence, source coverage, and the source_runs
-    ledger — every collection attempt and its real outcome (ok/empty/rate_limited/error/
-    not_configured). Reconcile your synthesis's limitations against source_runs: a run that
-    is 'empty' or 'error' was attempted and failed, and must not be reported as 'not available'."""
-    return store.dossier(job_id)
+    """Return a COMPACT, synthesis-ready view of a research job: its plan, a representative spread
+    of evidence (quotes + light context, heavy metadata trimmed), source coverage, and the
+    source_runs ledger summary — every collection attempt and its real outcome (ok/empty/
+    rate_limited/error). Numbers come from compute_metric / analyze_chatter (they read every row);
+    this view is for reading quotes and authoring. Reconcile limitations against source_runs: an
+    'empty' or 'error' run was attempted and failed, and must not be reported as 'not available'."""
+    return _compact_dossier(store.dossier(job_id))
 
 
 @mcp.tool()
