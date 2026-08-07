@@ -26,6 +26,7 @@ from research_engine.connectors import search_reddit as search_reddit_connector
 from research_engine.connectors import fetch_reddit_thread as fetch_reddit_thread_connector
 from research_engine.connectors import CONNECTOR_GUIDES, READY_CHECKS
 from research_engine import metrics as metrics_engine
+from research_engine import patterns as patterns_engine
 from research_engine.planner import build_plan
 from research_engine.capture import CaptureStore
 from research_engine.export import export_job
@@ -330,6 +331,18 @@ def compute_rate(job_id: int, numerator: str, denominator: str, group_by: str = 
     """Compute a RATE — numerator/denominator per item (e.g. shares/views = share rate) — as a median
     percentage per group and overall, with sample sizes. The kind of metric a consultant report leads with."""
     return metrics_engine.compute_rate(store.dossier(job_id)["evidence"], numerator, denominator, group_by, min_sample)
+
+
+@mcp.tool()
+def analyze_chatter(job_id: int, group_by: str = "source_type") -> dict[str, Any]:
+    """Read the collected chatter and return the credibility layer in one call: anonymized top
+    voices (real handles never exposed), recurring terms/phrases with counts, a per-channel/group
+    breakdown, the signal ratio (substantive vs noise), and — most important — a SUFFICIENCY
+    verdict: did we hear enough to answer? It reports saturation (has new-theme discovery
+    flattened?) and adequacy (enough substantive messages), and abstains honestly when there is
+    only landscape/metadata evidence to judge. Use this before synthesizing chatter, and cite the
+    speakers by their pseudonym (user_xxxx), never a real handle."""
+    return patterns_engine.analyze_chatter(store.dossier(job_id)["evidence"], salt=str(job_id), group_by=group_by)
 
 
 @mcp.tool()

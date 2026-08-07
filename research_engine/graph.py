@@ -22,6 +22,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
+from research_engine import patterns
+
 MAX_ROUNDS = 2
 
 # Platforms a user might name, and which collection lane serves each.
@@ -93,8 +95,15 @@ def review_gate(state: ResearchState, dossier: dict[str, Any]) -> tuple[str, lis
         themes = synth.get("themes") or []
         if themes and all(not t.get("citations") for t in themes):
             gaps.append("themes are not backed by citations")
-    if len(dossier.get("evidence") or []) < 3:
+    evidence = dossier.get("evidence") or []
+    if len(evidence) < 3:
         gaps.append("very thin evidence collected")
+    # Sufficiency: did we actually hear ENOUGH chatter to answer? assess_sufficiency abstains
+    # (enough=True) when there's no text to judge — e.g. landscape/metadata-only rows — so this
+    # only ever fires on real, measurably-thin chatter, never on numbers-only evidence.
+    suff = patterns.assess_sufficiency(evidence)
+    if suff.get("assessable") and not suff.get("enough"):
+        gaps.append("insufficient signal: " + "; ".join(suff.get("reasons") or ["collect more chatter"]))
     verdict = "needs_more" if (gaps and state.round < MAX_ROUNDS) else "pass"
     return verdict, gaps
 
@@ -157,12 +166,15 @@ def quantify_prompt(state: ResearchState) -> str:
     j, brief = state.job_id, state.brief
     return (
         f"QUANTIFY step for job {j}. Turn the data you collected into REAL numbers — this is what makes "
-        f"the report consultant-grade instead of a summary. First call list_metric_fields({j}) to see which "
-        f'numeric fields were actually captured. Then call compute_metric / compute_rate for the metrics that '
-        f'matter for "{brief}": e.g. median views/likes/followers by entity, or a rate like shares/views or '
-        f"comments/views — each grouped sensibly (by entity or source_type) and carrying its sample size n. "
-        f"Report the computed tables briefly (figure + n). If no numeric fields were captured, say so plainly "
-        f"in one line — do not invent numbers. Do NOT synthesize or export."
+        f"the report consultant-grade instead of a summary. "
+        f"(1) Platform metrics: call list_metric_fields({j}), then compute_metric / compute_rate for the "
+        f'figures that matter for "{brief}" (median views/likes/followers by entity, or a rate like '
+        f"shares/views), each grouped and carrying its sample size n. "
+        f"(2) Chatter credibility: call analyze_chatter({j}) — it returns the recurring terms/phrases with "
+        f"counts, per-channel breakdown, anonymized top voices, and a SUFFICIENCY verdict (did we hear "
+        f"enough? saturated? enough substantive messages?). Note the recurring patterns and the sufficiency "
+        f"verdict briefly. "
+        f"If no numeric fields were captured, say so in one line — do not invent numbers. Do NOT synthesize or export."
     )
 
 
@@ -185,8 +197,12 @@ def synth_prompt(state: ResearchState, final: bool = False) -> str:
         "• LEAD WITH THE ANSWER AND THE NUMBERS. executive_answer directly answers the brief and puts the key "
         "computed figures in it (with n). point_of_view states a sharp thesis — take a position, and disagree "
         "with the brief's framing if the evidence warrants.",
-        "• metrics_tables: paste the compute_metric/compute_rate tables (with n) — never hand-type figures. "
-        "method: state how the numbers were made (metric, query shapes, window, min sample, any cross-check).",
+        "• metrics_tables: paste the compute_metric/compute_rate tables AND the analyze_chatter patterns "
+        "(recurring terms with counts, per-channel splits) — with n; never hand-type figures. method: state "
+        "how the numbers were made (metric, query shapes, window, min sample, any cross-check).",
+        "• ANONYMIZE speakers — refer to people by their pseudonym (user_xxxx) from analyze_chatter, never a "
+        "real handle. In confidence, report the sufficiency verdict honestly (how much substantive chatter, "
+        "saturated or not) — that is how the reader knows they can trust the answer.",
         "• themes: each backed by real quoted evidence with URLs and by numbers where you have them; cite by [n] "
         "into numbered_sources. recommendations: what we'd do.",
         "• If a source was blocked, ROUTE AROUND IT with a proxy/other angle and give it ONE line — keep "
