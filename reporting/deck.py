@@ -84,25 +84,33 @@ def _fmt(v: float) -> str:
 
 
 def _stat_tiles(slide, table: dict[str, Any], top) -> None:
-    """Up to 3 big stat tiles from a metrics table's top rows: figure + group + n."""
-    rows = [r for r in (table.get("rows") or []) if _num(r.get("median")) is not None][:3]
-    if not rows:
+    """Up to 3 big stat tiles from a metrics table's top rows, using its best numeric column
+    (works whatever the row shape is: median, online, followers, messages, …)."""
+    from reporting.tables import chart_series
+
+    series = chart_series(table)
+    if not series:
+        return
+    pts = sorted(series["points"], key=lambda p: p["value"], reverse=True)[:3]
+    if not pts:
         return
     unit = table.get("unit") or ""
+    n_by_group = {str(r.get("group")): r.get("n") for r in (table.get("rows") or []) if isinstance(r, dict)}
     gap = Inches(0.35)
-    tile_w = (Inches(11.9) - gap * (len(rows) - 1)) / len(rows)
+    tile_w = (Inches(11.9) - gap * (len(pts) - 1)) / len(pts)
     left = Inches(0.7)
-    for r in rows:
+    for p in pts:
         panel = slide.shapes.add_shape(1, left, top, tile_w, Inches(1.9))
         panel.fill.solid()
         panel.fill.fore_color.rgb = _PANEL
         panel.line.fill.background()
-        val = _fmt(_num(r.get("median")))
+        val = _fmt(p["value"]) + (unit if unit == "%" else "")
         _text(slide, left, top + Inches(0.22), tile_w, Inches(0.9),
-              val + (unit if unit == "%" else ""), size=40, color=_ACCENT, bold=True, align=PP_ALIGN.CENTER)
-        sub = str(r.get("group", "—"))
-        if r.get("n") is not None:
-            sub += f"   ·   n={r['n']}"
+              val, size=40, color=_ACCENT, bold=True, align=PP_ALIGN.CENTER)
+        sub = p["group"]
+        n = n_by_group.get(p["group"])
+        if n is not None:
+            sub += f"   ·   n={n}"
         _text(slide, left, top + Inches(1.25), tile_w, Inches(0.5), sub,
               size=13, color=_SUBTLE, align=PP_ALIGN.CENTER)
         left = Emu(int(left) + int(tile_w) + int(gap))

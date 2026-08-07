@@ -51,27 +51,25 @@ def _para(doc: Document, text: str, *, color: RGBColor | None = None, size: floa
 
 
 def _metric_table(doc: Document, table: dict[str, Any]) -> None:
-    rows = table.get("rows") or []
-    if not rows:
+    from reporting.tables import normalize_table
+
+    norm = normalize_table(table)
+    if not norm["body"]:
         return
-    _heading(doc, (table.get("title") or "Metric") + (f"  ({table['unit']})" if table.get("unit") else ""), level=2)
-    group_label = (table.get("group_by") or "Group").title()
-    t = doc.add_table(rows=1, cols=4)
+    _heading(doc, norm["title"] + (f"  ({norm['unit']})" if norm["unit"] else ""), level=2)
+    header, body = norm["header"], norm["body"]
+    t = doc.add_table(rows=1, cols=len(header))
     t.style = "Light Grid Accent 1"
-    for cell, label in zip(t.rows[0].cells, [group_label, "Median", "n", "Range"]):
-        run = cell.paragraphs[0].add_run(label)
+    for cell, label in zip(t.rows[0].cells, header):
+        run = cell.paragraphs[0].add_run(str(label))
         run.font.bold = True
-        run.font.size = Pt(10)
+        run.font.size = Pt(9.5)
         run.font.name = theme.FONT
-    for r in rows:
+    for row in body:
         cells = t.add_row().cells
-        med = r.get("median")
-        rng = f"{r.get('min')}–{r.get('max')}" if r.get("min") is not None and r.get("max") is not None else "—"
-        vals = [str(r.get("group", "—")), "—" if med is None else str(med),
-                "—" if r.get("n") is None else str(r.get("n")), rng]
-        for cell, v in zip(cells, vals):
-            run = cell.paragraphs[0].add_run(v)
-            run.font.size = Pt(10)
+        for cell, v in zip(cells, row):
+            run = cell.paragraphs[0].add_run(str(v))
+            run.font.size = Pt(9.5)
             run.font.name = theme.FONT
     if table.get("note"):
         _para(doc, table["note"], color=_SUBTLE, size=9, italic=True)

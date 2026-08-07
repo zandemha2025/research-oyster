@@ -6,6 +6,7 @@ from pathlib import Path
 
 from research_engine.export import _build_package
 from reporting import charts, package
+from reporting.tables import normalize_table, chart_series
 
 
 SYNTH = {
@@ -71,6 +72,34 @@ class DeliverablesTests(unittest.TestCase):
             out = charts.build_charts(
                 [{"title": "empty", "rows": [{"group": "a", "median": None}]}], Path(d))
             self.assertEqual([c for c in out if c.get("png")], [])  # no chart drawn
+
+
+class TableNormalizationTests(unittest.TestCase):
+    def test_arbitrary_columns_render(self):
+        # The exact shape that rendered as empty cells: a Discord table with no median/n.
+        table = {"title": "Discord engagement", "group_by": "entity", "rows": [
+            {"group": "Marvel Rivals", "online_n1": 1131011, "members_n1": 4416132,
+             "online_rate_pct": 25.61, "active_voice_channels": "not measured (0 detected)"},
+            {"group": "Delta Force", "online_n1": 106825, "members_n1": 768446,
+             "online_rate_pct": 13.9, "active_voice_channels": 18}]}
+        norm = normalize_table(table)
+        self.assertEqual(norm["header"][0], "Entity")
+        self.assertIn("online n1", norm["header"])
+        self.assertIn("active voice channels", norm["header"])
+        self.assertEqual(len(norm["body"]), 2)
+        # values are formatted (1.1M) not blank
+        self.assertTrue(any("M" in c or "," in c for c in norm["body"][0]))
+
+    def test_chart_series_picks_a_numeric_column_without_median(self):
+        table = {"title": "chatter", "rows": [
+            {"group": "kick", "messages": 53, "substantive": 40},
+            {"group": "web", "messages": 20, "substantive": 18}]}
+        s = chart_series(table)
+        self.assertIsNotNone(s)
+        self.assertEqual(len(s["points"]), 2)
+
+    def test_chart_series_none_when_no_numbers(self):
+        self.assertIsNone(chart_series({"rows": [{"group": "a", "note": "x"}]}))
 
 
 if __name__ == "__main__":

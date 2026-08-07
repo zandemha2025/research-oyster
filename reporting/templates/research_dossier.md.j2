@@ -7,14 +7,14 @@ _Generated {{ generated_at }} · job #{{ job.id }} · answer drawn from {{ evide
 
 {% endif %}## Executive answer
 {{ synthesis.executive_answer }}
-{% if synthesis.metrics_tables %}
+{% if metrics_tables %}
 ## The numbers
-{% for table in synthesis.metrics_tables %}
+{% for table in metrics_tables %}
 ### {{ table.title | cell }}{% if table.unit %} ({{ table.unit | cell }}){% endif %}
 
-| {{ (table.group_by or 'Group') | cell }} | Median | n | Range |
-|---|---|---|---|
-{% for r in table.rows %}| {{ r.group | cell }} | {{ r.median if r.median is not none else '—' }} | {{ r.n if r.n is not none else '—' }} | {% if r.min is not none and r.max is not none %}{{ r.min }}–{{ r.max }}{% else %}—{% endif %} |
+| {% for h in table.header %}{{ h | cell }} | {% endfor %}
+|{% for h in table.header %}---|{% endfor %}
+{% for row in table.body %}| {% for cell in row %}{{ cell | cell }} | {% endfor %}
 {% endfor %}{% if table.note %}
 _{{ table.note | cell }}_
 {% endif %}{% endfor %}{% endif %}

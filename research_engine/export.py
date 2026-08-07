@@ -105,12 +105,15 @@ def export_job(store: ResearchStore, job_id: int, output_dir: Path | str = Path(
     folder = base / f"research-job-{job_id}-{_slug(job.get('brief', ''))}"
     folder.mkdir(parents=True, exist_ok=True)
 
+    from reporting.tables import normalize_table
+
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)
     env.filters["cell"] = _cell
     markdown = env.get_template("research_dossier.md.j2").render(
         job=job,
         plan=job.get("plan", {}),
         synthesis=synthesis,
+        metrics_tables=[normalize_table(t) for t in (synthesis.get("metrics_tables") or [])],
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         findings=_group_findings(evidence),
         coverage=[{"source": source, "count": count} for source, count in dossier.get("coverage", {}).items()],

@@ -45,25 +45,37 @@ def _rows_with_median(table: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def write_metric_csv(table: dict[str, Any], path: Path) -> None:
-    cols = ["group", "median", "mean", "n", "min", "max", "total"]
+    """Write the table's real columns (whatever the row shape is), group first."""
+    rows = [r for r in (table.get("rows") or []) if isinstance(r, dict)]
+    cols: list[str] = []
+    for r in rows:
+        for k in r.keys():
+            if k != "group" and k not in cols:
+                cols.append(k)
+    header = ["group"] + cols
     with path.open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(cols)
-        for r in table.get("rows") or []:
-            w.writerow([r.get(c, "") for c in cols])
+        w.writerow(header)
+        for r in rows:
+            w.writerow([r.get(c, "") for c in header])
 
 
 def render_metric_chart(table: dict[str, Any], path_png: Path) -> Path | None:
-    """Horizontal bar of median-by-group, tallest at top, each bar labelled with its value and n."""
-    rows = _rows_with_median(table)
-    if not rows:
-        return None
-    rows = sorted(rows, key=lambda r: _num(r.get("median")) or 0.0)  # ascending → largest at top
-    groups = [str(r.get("group", "—")) for r in rows]
-    medians = [_num(r.get("median")) or 0.0 for r in rows]
-    ns = [r.get("n") for r in rows]
+    """Horizontal bar of the table's best numeric column by group, tallest at top, each bar
+    labelled with its value (and n when present)."""
+    from reporting.tables import chart_series
 
-    height = max(2.2, 0.55 * len(rows) + 1.2)
+    series = chart_series(table)
+    if not series:
+        return None
+    pts = sorted(series["points"], key=lambda p: p["value"])  # ascending → largest at top
+    groups = [p["group"] for p in pts]
+    medians = [p["value"] for p in pts]
+    # attach n per group when the row carried one (rate/count tables)
+    n_by_group = {str(r.get("group")): r.get("n") for r in (table.get("rows") or []) if isinstance(r, dict)}
+    ns = [n_by_group.get(g) for g in groups]
+
+    height = max(2.2, 0.55 * len(pts) + 1.2)
     fig, ax = plt.subplots(figsize=(8.5, height), dpi=150)
     fig.patch.set_facecolor(theme.PAPER)
     ax.set_facecolor(theme.PAPER)
@@ -85,7 +97,8 @@ def render_metric_chart(table: dict[str, Any], path_png: Path) -> Path | None:
 
     ax.set_title(table.get("title") or "Metric", loc="left", fontsize=13.5,
                  color=theme.INK, fontweight="bold", fontfamily=theme.FONT, pad=12)
-    xlabel = f"median ({unit})" if unit and unit != "%" else "median"
+    col = series.get("col_label") or "value"
+    xlabel = f"{col} ({unit})" if unit and unit != "%" else col
     ax.set_xlabel(xlabel, fontsize=10, color=theme.SUBTLE, fontfamily=theme.FONT)
     ax.set_xlim(0, span * 1.22)
     for spine in ("top", "right", "left"):
