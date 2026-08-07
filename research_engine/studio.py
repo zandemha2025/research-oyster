@@ -491,10 +491,20 @@ async def list_conversations(request: Request) -> JSONResponse:
     ])
 
 
+async def _json_dict(request: Request) -> dict:
+    """Parse a JSON request body to a dict, tolerating malformed or non-object bodies. A buggy
+    client should get a clean default/404, never an unhandled 500."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
 async def create_conversation(request: Request) -> JSONResponse:
     if not _require_token(request):
         return JSONResponse({"error": "expired session; refresh"}, status_code=403)
-    body = await request.json()
+    body = await _json_dict(request)
     title = (body.get("title") or "New research").strip()[:120]
     cid = secrets.token_hex(8)
     CONVERSATIONS[cid] = Conversation(cid, title)
@@ -504,7 +514,7 @@ async def create_conversation(request: Request) -> JSONResponse:
 async def send_message(request: Request) -> JSONResponse:
     if not _require_token(request):
         return JSONResponse({"error": "expired session; refresh"}, status_code=403)
-    body = await request.json()
+    body = await _json_dict(request)
     cid = body.get("conversation_id")
     message = (body.get("message") or "").strip()
     conv = CONVERSATIONS.get(cid)
@@ -524,7 +534,10 @@ async def stream(request: Request) -> EventSourceResponse:
     conv = CONVERSATIONS.get(cid)
     if not conv:
         return JSONResponse({"error": "unknown conversation"}, status_code=404)
-    replay = int(request.query_params.get("from", "0"))
+    try:  # a bad/negative ?from= must not 500 the stream; clamp to a full replay
+        replay = max(0, int(request.query_params.get("from", "0")))
+    except (TypeError, ValueError):
+        replay = 0
 
     async def gen():
         # Replay anything the client missed (reconnect / late open), then live-tail.
@@ -674,8 +687,8 @@ async def get_settings(request: Request) -> JSONResponse:
 async def post_settings(request: Request) -> JSONResponse:
     if not _require_token(request):
         return JSONResponse({"error": "expired session; refresh"}, status_code=403)
-    body = await request.json()
-    _save_settings(body if isinstance(body, dict) else {})
+    body = await _json_dict(request)
+    _save_settings(body)
     return JSONResponse({"ok": True, **_public_settings()})
 
 

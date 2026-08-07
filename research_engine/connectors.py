@@ -994,9 +994,14 @@ async def discover_sources(store: ResearchStore, job_id: int, topic: str, *,
     ]
     seen: set[str] = set()
     venues: dict[str, list[dict[str, Any]]] = {}
+    probe_errors = 0
     for probe in probes:
-        found = await search_web(store, job_id, probe, limit=10,
-                                 tavily_key=tavily_key, brave_key=brave_key, serper_key=serper_key)
+        try:  # one flaky probe (e.g. a transient DDG ConnectError) must not sink the whole discovery
+            found = await search_web(store, job_id, probe, limit=10,
+                                     tavily_key=tavily_key, brave_key=brave_key, serper_key=serper_key)
+        except Exception:
+            probe_errors += 1
+            continue
         for lead in found["results"]:
             url = lead["url"]
             key = urlparse(url)._replace(query="", fragment="").geturl()
@@ -1004,17 +1009,21 @@ async def discover_sources(store: ResearchStore, job_id: int, topic: str, *,
                 continue
             seen.add(key)
             venues.setdefault(_classify_venue(url), []).append(lead)
+    if probe_errors == len(probes):  # every probe failed — say so instead of a silent empty result
+        raise ValueError("Web search is unavailable right now (all discovery probes failed). "
+                         "Retry shortly, or set a TAVILY_API_KEY/BRAVE_API_KEY/SERPER_API_KEY.")
     ordered = ["reddit", "forum", "youtube", "x", "discord", "twitch", "kick", "tiktok", "facebook", "news_or_web"]
     grouped = {venue: venues[venue] for venue in ordered if venue in venues}
+    note = ("Go where the conversation is. For reddit venues use search_reddit / "
+            "fetch_reddit_thread; for forums/news use crawl_web_page; note x/discord/twitch/kick "
+            "leads but remember live chat and private servers need the supervised browser route.")
+    if probe_errors:
+        note = f"({probe_errors} of {len(probes)} search probes failed transiently.) " + note
     return {
         "topic": topic,
         "total_leads": sum(len(items) for items in grouped.values()),
         "venues": grouped,
-        "note": (
-            "Go where the conversation is. For reddit venues use search_reddit / "
-            "fetch_reddit_thread; for forums/news use crawl_web_page; note x/discord/twitch/kick "
-            "leads but remember live chat and private servers need the supervised browser route."
-        ),
+        "note": note,
     }
 
 
