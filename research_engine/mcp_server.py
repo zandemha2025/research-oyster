@@ -10,6 +10,8 @@ from db.queries import connect, migrate, seed_config
 from research_engine.connectors import fetch_rss as fetch_rss_connector
 from research_engine.connectors import search_x as search_x_connector
 from research_engine.connectors import inspect_discord_invite as inspect_discord_connector
+from research_engine.connectors import discord_widget as discord_widget_connector
+from research_engine.connectors import discord_landscape as discord_landscape_connector
 from research_engine.connectors import read_discord_channel as read_discord_connector
 from research_engine.connectors import run_apify_actor as run_apify_connector
 from research_engine.connectors import apify_collect as apify_collect_connector
@@ -161,6 +163,26 @@ async def search_x(job_id: int, query: str, max_results: int = 25) -> dict[str, 
 async def inspect_discord_invite(job_id: int, invite_url_or_code: str) -> dict[str, Any]:
     """Inspect and store public metadata for any Discord invite discovered during research."""
     return await _tracked("discord_invite", job_id, invite_url_or_code, inspect_discord_connector(store, job_id, invite_url_or_code))
+
+
+@mcp.tool()
+async def discord_landscape(job_id: int, topic: str, limit: int = 6) -> dict[str, Any]:
+    """Map the Discord communities for a TOPIC using only public data — no token, no bot. Web
+    search finds the servers + invites, then each is enriched with member/online counts and the
+    public widget (live online members + active voice channels). Returns a ranked list with the
+    numbers in metadata.metrics. This is the free 'community landscape' signal; it does not read
+    message content."""
+    return await _tracked("discord_landscape", job_id, topic,
+                          discord_landscape_connector(store, job_id, topic, limit))
+
+
+@mcp.tool()
+async def discord_widget(job_id: int, invite_or_guild: str) -> dict[str, Any]:
+    """Read a Discord server's PUBLIC widget (no token): live online count, a sample of online
+    members with status, and active voice channels. Accepts an invite code/URL or a guild id. A
+    server with the widget disabled returns widget_enabled=False, not an error."""
+    return await _tracked("discord_widget", job_id, invite_or_guild,
+                          discord_widget_connector(store, job_id, invite_or_guild))
 
 
 @mcp.tool()

@@ -74,7 +74,10 @@ CONNECTOR_GUIDES: dict[str, dict[str, Any]] = {
         ],
     },
     "discord_public": {
-        "scope": "Invite discovery and public member/activity metadata via inspect_discord_invite.",
+        "scope": "Public community landscape + live activity, no token: discord_landscape(topic) maps the "
+                 "relevant servers with member/online counts + voice activity; discord_widget reads a "
+                 "server's live online members and voice channels; inspect_discord_invite for a single invite. "
+                 "For message content that leaked publicly, use search_reddit / search_web / crawl_web_page.",
     },
     "discord_messages": {
         "setup": "Install your Discord bot in each server and grant View Channel, Read Message History, and the Message Content intent.",
@@ -233,6 +236,160 @@ async def inspect_discord_invite(store: ResearchStore, job_id: int, invite_url_o
         metadata={"invite_code": code, "guild_id": guild.get("id"), "member_count": members, "presence_count": online},
     )
     return {**result, "invite_code": code, "guild_name": name, "member_count": members, "presence_count": online, "raw_response_id": raw_id}
+
+
+# --- Discord public "exhaust": landscape + live activity, no token, no ToS-gray access ---------
+# Discord message content lives behind auth, but a lot of Discord SIGNAL spills onto the open web
+# and through Discord's own PUBLIC endpoints. We stack every clean source: web search finds the
+# servers + invite links; the invite API gives member/online counts; the public widget gives the
+# live online-member list + active voice channels for servers that enabled it. That covers "how
+# big, how active, who's around, what's announced" — most of what a brief needs — without touching
+# a burner account.
+_INVITE_RE = re.compile(r"(?:discord(?:app)?\.com/invite/|discord\.gg/)([A-Za-z0-9-]{2,32})")
+
+
+def _discord_invite_codes(text: str, limit: int = 25) -> list[str]:
+    """Extract unique Discord invite codes from arbitrary text (search results, crawled pages)."""
+    out: list[str] = []
+    for code in _INVITE_RE.findall(text or ""):
+        if code not in out:
+            out.append(code)
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def discord_widget(store: ResearchStore, job_id: int, invite_or_guild: str) -> dict[str, Any]:
+    """Read a server's PUBLIC widget: live online count, a sample of online members with status,
+    and active voice channels — for any server with its widget enabled. Accepts a guild id, an
+    invite code, or an invite URL. No token. A widget-disabled server returns widget_enabled=False
+    (not an error) — the invite-API landscape counts still work via inspect_discord_invite."""
+    val = str(invite_or_guild).strip()
+    async with httpx.AsyncClient(timeout=30, headers={"User-Agent": "ResearchOyster/0.2"}) as client:
+        guild_id = val if val.isdigit() else None
+        name = None
+        if guild_id is None:
+            match = _INVITE_RE.search(val)
+            code = match.group(1) if match else val.rsplit("/", 1)[-1]
+            inv = await client.get(f"https://discord.com/api/v10/invites/{code}", params={"with_counts": "true"})
+            record_raw(store.database_url, job_id, "research.discord", "discord_invite", inv)
+            if inv.status_code != 200:
+                raise ValueError("That Discord invite is invalid or expired.")
+            guild = inv.json().get("guild", {})
+            guild_id, name = guild.get("id"), guild.get("name")
+        widget = await client.get(f"https://discord.com/api/guilds/{guild_id}/widget.json")
+        raw_id = record_raw(store.database_url, job_id, "research.discord", "discord_widget", widget)
+        if widget.status_code == 403:
+            return {"guild_id": guild_id, "widget_enabled": False,
+                    "note": "This server has its public widget disabled; landscape member/online counts "
+                            "are still available via inspect_discord_invite."}
+        widget.raise_for_status()
+        data = widget.json()
+    name = data.get("name") or name or str(guild_id)
+    members = data.get("members") or []
+    channels = data.get("channels") or []
+    online = data.get("presence_count")
+    sample = [f"{m.get('username')} [{m.get('status')}]" for m in members[:15] if m.get("username")]
+    voice = [c.get("name") for c in channels if c.get("name")][:15]
+    excerpt = (f"{name}: {online if online is not None else 'unknown'} online now; "
+               f"{len(members)} members shown; {len(channels)} active voice channels"
+               + (f" ({', '.join(voice)})" if voice else "") + ".")
+    metrics: dict[str, int] = {"voice_channels": len(channels)}
+    if online is not None:
+        metrics["online"] = online
+    result = store.add_evidence(
+        job_id, source_type="discord", url=f"https://discord.com/channels/{guild_id}", title=name,
+        excerpt=excerpt, metadata={"entity": name, "metrics": metrics, "widget_enabled": True,
+                                   "online_members_sample": sample, "voice_channels": voice,
+                                   "guild_id": guild_id, "raw_response_id": raw_id})
+    return {**result, "guild_id": guild_id, "name": name, "widget_enabled": True, "online": online,
+            "voice_channels": len(channels), "online_members_sample": sample, "raw_response_id": raw_id}
+
+
+async def discord_landscape(store: ResearchStore, job_id: int, topic: str, limit: int = 6) -> dict[str, Any]:
+    """Turn a topic into a ranked map of the relevant Discord communities using ONLY public data:
+    web search finds the servers + invite links, then each is enriched with the invite API
+    (member/online counts) and the public widget (live online + voice activity). Stores one
+    consolidated row per server with the numbers under metadata.metrics so metrics.py can rank
+    them. No token, no ToS-gray access — landscape + activity, not message content."""
+    topic = (topic or "").strip()
+    if not topic:
+        raise ValueError("Provide a topic to map Discord communities for.")
+    limit = max(1, min(limit, 12))
+
+    # 1) Seed likely VANITY invite codes from the topic — big communities usually own
+    # discord.gg/<name> (verified: valorant→2.5M, fortnite→1.8M). Invalid seeds 404 and are
+    # dropped in step 2, so this only ever helps.
+    codes: list[str] = []
+    for seed in (re.sub(r"[^a-z0-9]", "", topic.lower()), re.sub(r"[^a-z0-9]", "-", topic.lower()).strip("-")):
+        if seed and seed not in codes:
+            codes.append(seed)
+
+    # 2) Discover more via open-web search (finds discord.gg links + directory pages).
+    try:
+        hits = await search_web(store, job_id, f"{topic} discord server invite", limit=10)
+    except Exception:
+        hits = []
+    hitlist = hits if isinstance(hits, list) else (hits.get("results") or hits.get("items") or [])
+    for hit in hitlist:
+        for code in _discord_invite_codes(str(hit)):
+            if code not in codes:
+                codes.append(code)
+    codes = codes[:limit]
+
+    # 2) Enrich each server: invite counts + widget activity → one consolidated evidence row.
+    communities: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=30, headers={"User-Agent": "ResearchOyster/0.2"}) as client:
+        for code in codes:
+            try:
+                inv = await client.get(f"https://discord.com/api/v10/invites/{code}", params={"with_counts": "true"})
+                record_raw(store.database_url, job_id, "research.discord", "discord_invite", inv)
+                if inv.status_code != 200:
+                    continue
+                payload = inv.json()
+                guild = payload.get("guild", {})
+                gid, name = guild.get("id"), (guild.get("name") or code)
+                members = payload.get("approximate_member_count")
+                online = payload.get("approximate_presence_count")
+                voice: list[str] = []
+                widget_on = False
+                wid = None
+                try:
+                    widget = await client.get(f"https://discord.com/api/guilds/{gid}/widget.json")
+                    wid = record_raw(store.database_url, job_id, "research.discord", "discord_widget", widget)
+                    if widget.status_code == 200:
+                        widget_on = True
+                        wdata = widget.json()
+                        voice = [c.get("name") for c in (wdata.get("channels") or []) if c.get("name")]
+                        if online is None:
+                            online = wdata.get("presence_count")
+                except Exception:
+                    pass
+                metrics: dict[str, int] = {}
+                if members is not None:
+                    metrics["members"] = members
+                if online is not None:
+                    metrics["online"] = online
+                excerpt = (f"{name}: {members if members is not None else 'unknown'} members, "
+                           f"{online if online is not None else 'unknown'} online"
+                           + (f"; {len(voice)} active voice channels" if widget_on else "") + ".")
+                result = store.add_evidence(
+                    job_id, source_type="discord", url=f"https://discord.gg/{code}", title=name,
+                    excerpt=excerpt, query=topic,
+                    metadata={"entity": name, "query_shape": topic, "metrics": metrics,
+                              "invite_code": code, "guild_id": gid, "widget_enabled": widget_on,
+                              "voice_channels": voice, "raw_response_id": wid})
+                communities.append({**result, "name": name, "members": members, "online": online,
+                                    "widget_enabled": widget_on, "voice_channels": len(voice),
+                                    "invite_code": code})
+            except Exception:
+                continue
+    communities.sort(key=lambda c: (c.get("members") or 0), reverse=True)
+    return {"topic": topic, "discovered": len(codes), "matched": len(communities),
+            "communities": communities,
+            "note": "Public landscape only (member/online counts + widget activity). For message "
+                    "content, the same discussion is usually reachable via search_reddit/search_web "
+                    "and any announcement mirrors; full in-channel reads require the opt-in path."}
 
 
 async def run_apify_actor(store: ResearchStore, job_id: int, token: str, actor_id: str,

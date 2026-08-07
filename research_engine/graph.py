@@ -135,9 +135,12 @@ def collect_prompt(lane: str, state: ResearchState) -> str:
             f'apify_collect(platform="kick", …) is the paid alternative. Store via add_evidence. Do not synthesize.'
         ),
         "discord": (
-            f'COLLECT step (Discord) for job {j}. Default to inspect_discord_invite for community-LANDSCAPE signal '
-            f'(member/online counts) on the most relevant servers about "{brief}" — this always works. Full message '
-            f"reading is opt-in only; do not attempt it unless enabled. Store what you get via add_evidence. Do not synthesize."
+            f'COLLECT step (Discord) for job {j}. Get the most Discord signal WITHOUT any token by stacking public '
+            f'sources: (1) discord_landscape(topic="{brief}") — finds the relevant servers and returns member/online '
+            f'counts + live voice activity WITH numbers; (2) discord_widget on any specific invite for a deeper live '
+            f'read (online members, voice channels); (3) for message CONTENT that leaked publicly, search_reddit and '
+            f'search_web for dev announcements, quotes, and recaps of those servers, and crawl_web_page the best pages. '
+            f"Full in-channel reading is opt-in only — do not attempt it unless enabled. Store via add_evidence. Do not synthesize."
         ),
         "web": (
             f'COLLECT step (Web) for job {j}. Use search_web to find the most relevant public pages/articles about '
