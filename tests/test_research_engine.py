@@ -107,10 +107,11 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_optional_connectors_always_offer_ordered_fallbacks(self):
         store = mock.Mock()
+        # Kick is intentionally NOT here: it no longer requires credentials (search_kick falls back
+        # to the free public API path), so it does not return a not_configured envelope.
         cases = [
             (connectors.run_apify_actor(store, 1, "", "owner/actor", {}, "reddit"), "apify"),
             (connectors.search_twitch(store, 1, "", "", "cars"), "twitch"),
-            (connectors.search_kick(store, 1, "", "", "cars"), "kick"),
             (connectors.read_discord_channel(store, 1, "", "123"), "discord_messages"),
         ]
         for coro, connector in cases:
@@ -128,10 +129,12 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         )
         with mock.patch.object(mcp_server, "settings", blank):
             status = mcp_server.connector_status()
-        for connector in ("twitch", "kick", "apify", "discord_messages"):
+        # These stay credential-gated when blank; kick is now always-ready (free public API).
+        for connector in ("twitch", "apify", "discord_messages"):
             self.assertIn("ready", status[connector])
             self.assertFalse(status[connector]["ready"])
             self.assertTrue(status[connector]["fallbacks"], f"{connector} needs fallbacks in connector_status")
+        self.assertTrue(status["kick"]["ready"])  # works with no key via search_kick_public
 
     def test_private_and_local_crawl_targets_are_rejected(self):
         private = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))]

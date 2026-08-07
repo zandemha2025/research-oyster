@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+import unittest
+
+from research_engine.connectors import _kick_extract
+
+
+class KickExtractTests(unittest.TestCase):
+    def test_channel_endpoint_shape_live(self):
+        # The v2/channels/{slug} shape: livestream nested with viewer_count + categories.
+        payload = {"slug": "xqc", "followers_count": 1098999,
+                   "livestream": {"viewer_count": 7326, "session_title": "LIVE",
+                                  "categories": [{"name": "Minecraft"}]}}
+        m = _kick_extract(payload)
+        self.assertEqual(m["slug"], "xqc")
+        self.assertEqual(m["followers"], 1098999)
+        self.assertTrue(m["is_live"])
+        self.assertEqual(m["viewers"], 7326)
+        self.assertEqual(m["category"], "Minecraft")
+
+    def test_search_shape_offline_uses_flat_flags(self):
+        # The /api/search channels shape: flat isLive + recentCategories, no livestream object.
+        payload = {"slug": "tabbyminecraft", "followersCount": 2703, "isLive": False,
+                   "recentCategories": [{"name": "Minecraft"}]}
+        m = _kick_extract(payload)
+        self.assertEqual(m["slug"], "tabbyminecraft")
+        self.assertEqual(m["followers"], 2703)   # tolerates followersCount alias
+        self.assertFalse(m["is_live"])
+        self.assertIsNone(m["viewers"])          # offline → no viewer count
+        self.assertEqual(m["category"], "Minecraft")
+
+    def test_missing_numbers_and_slug_fallback(self):
+        m = _kick_extract({"user": {"username": "someone"}}, slug="")
+        self.assertEqual(m["slug"], "someone")   # falls back to user.username
+        self.assertIsNone(m["followers"])
+        self.assertFalse(m["is_live"])
+
+    def test_numbers_are_coerced_to_int(self):
+        m = _kick_extract({"slug": "x", "followers_count": "1500",
+                           "livestream": {"viewer_count": "42"}})
+        self.assertEqual(m["followers"], 1500)
+        self.assertEqual(m["viewers"], 42)
+
+
+if __name__ == "__main__":
+    unittest.main()

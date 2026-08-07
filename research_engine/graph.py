@@ -130,8 +130,9 @@ def collect_prompt(lane: str, state: ResearchState) -> str:
             f'"{brief}" right now (no creds). Store real data via add_evidence. Do not synthesize.'
         ),
         "kick": (
-            f'COLLECT step (Kick) for job {j}. Use apify_collect(platform="kick", query="…") for channel/clip '
-            f'stats WITH numbers (followers, viewer counts, categories) about "{brief}". Store via add_evidence. Do not synthesize.'
+            f'COLLECT step (Kick) for job {j}. PREFER search_kick(query="…") — it works with NO key and returns '
+            f'channel followers, live status, viewer counts, and category WITH numbers about "{brief}". '
+            f'apify_collect(platform="kick", …) is the paid alternative. Store via add_evidence. Do not synthesize.'
         ),
         "discord": (
             f'COLLECT step (Discord) for job {j}. Default to inspect_discord_invite for community-LANDSCAPE signal '

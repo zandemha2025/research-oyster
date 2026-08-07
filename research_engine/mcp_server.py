@@ -209,7 +209,9 @@ async def read_twitch_chat(job_id: int, channel: str, seconds: int = 8, limit: i
 
 @mcp.tool()
 async def search_kick(job_id: int, query: str, pages: int = 3) -> dict[str, Any]:
-    """Search active Kick streams for any topic, category, creator, or title."""
+    """Search Kick for any topic, category, creator, or slug — FREE, no key required. Returns
+    channel followers, live status, viewer counts, and category (numbers land in metadata.metrics
+    for compute_metric). Uses Kick's public API by default; the official OAuth API if creds are set."""
     return await _tracked("kick", job_id, query,
                           search_kick_connector(store, job_id, settings.kick_client_id, settings.kick_client_secret, query, pages))
 

@@ -11,7 +11,7 @@ import os
 import re
 import ipaddress
 import socket
-from urllib.parse import urljoin, urlparse, parse_qs, unquote
+from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -65,11 +65,12 @@ CONNECTOR_GUIDES: dict[str, dict[str, Any]] = {
         ],
     },
     "kick": {
-        "setup": "Add a Kick developer Client ID and Client Secret in Setup.",
+        "setup": "No key needed — search_kick works free via Kick's public API (real-browser "
+                 "fingerprint). Optional Client ID/Secret in Setup switches to the official OAuth API.",
         "fallbacks": [
+            "search_kick(query) — free: returns channel followers, live status, viewer counts, and category",
             "search_web / search_reddit for the surrounding discussion (free)",
             "crawl_web_page on public kick.com category and channel pages",
-            "get_browser_capture_mission only for live chat the researcher is watching",
         ],
     },
     "discord_public": {
@@ -108,7 +109,7 @@ READY_CHECKS: dict[str, Any] = {
     "apify": lambda s: bool(s.apify_token),
     "x_official": lambda s: bool(s.x_bearer_token),
     "twitch": lambda s: bool(s.twitch_client_id and s.twitch_client_secret),
-    "kick": lambda s: bool(s.kick_client_id and s.kick_client_secret),
+    # kick omitted → always ready: search_kick now works free via the public API path.
     "discord_messages": lambda s: bool(s.discord_bot_token),
 }
 
@@ -341,8 +342,9 @@ async def search_twitch(store: ResearchStore, job_id: int, client_id: str, clien
 
 async def search_kick(store: ResearchStore, job_id: int, client_id: str, client_secret: str,
                       query: str, pages: int = 3) -> dict[str, Any]:
+    # No OAuth creds? Use the free public path (real-browser fingerprint) instead of declining.
     if not client_id or not client_secret:
-        return not_configured("kick")
+        return await search_kick_public(store, job_id, query)
     async with httpx.AsyncClient(timeout=30) as client:
         token_response = await client.post("https://id.kick.com/oauth/token", data={"client_id": client_id, "client_secret": client_secret, "grant_type": "client_credentials"})
         record_raw(store.database_url, job_id, "research.kick", "oauth_token", token_response)
@@ -368,6 +370,145 @@ async def search_kick(store: ResearchStore, job_id: int, client_id: str, client_
                                     excerpt=f"{slug}: {row.get('viewer_count', 0)} viewers in {category.get('name', 'unknown')}.", query=query, metadata=row)
         matched.append({**result, "url": url, "stream": row})
     return {"query": query, "scanned": len(rows), "matched": len(matched), "items": matched, "raw_response_id": raw_id}
+
+
+# --- Kick, no credentials -------------------------------------------------------------------
+# Kick sits behind Cloudflare, which 403s a plain UA from a datacenter IP but serves a real
+# browser TLS fingerprint. curl_cffi's Safari impersonation gets through (verified live), so the
+# free Kick lane needs no OAuth app — same spirit as the Scrapling fallback in crawl_web_page.
+# curl_cffi is synchronous and bypasses the agent proxy by design; run it in a thread.
+_KICK_IMPERSONATE = ("safari17_0", "safari15_5", "safari15_3")
+
+
+def _kick_get_blocking(path: str) -> tuple[int, bytes, str]:
+    """GET a public kick.com JSON endpoint with a real-browser fingerprint. Returns
+    (status, body, final_url); status 0 means the request could not be made at all."""
+    from curl_cffi import requests as creq
+
+    url = path if path.startswith("http") else f"https://kick.com{path}"
+    last: tuple[int, bytes, str] = (0, b"", url)
+    for imp in _KICK_IMPERSONATE:
+        try:
+            r = creq.get(url, impersonate=imp, timeout=25, headers={"Accept": "application/json"})
+            last = (r.status_code, r.content, str(r.url))
+            if r.status_code == 200:
+                return last
+        except Exception:
+            continue
+    return last
+
+
+def _kick_extract(channel: dict[str, Any], slug: str = "") -> dict[str, Any]:
+    """Pull the numbers a report needs out of a Kick payload. Pure + tolerant of both the
+    v2/channels/{slug} shape (livestream nested) and the /api/search channels shape (isLive flat)."""
+    def _int(v: Any) -> int | None:
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return None
+
+    slug = slug or channel.get("slug") or (channel.get("user") or {}).get("username") or ""
+    followers = channel.get("followers_count")
+    if followers is None:
+        followers = channel.get("followersCount")
+    live_obj = channel.get("livestream") if isinstance(channel.get("livestream"), dict) else None
+    is_live = bool(live_obj) or bool(channel.get("isLive")) or bool(channel.get("is_live"))
+    viewers = category = title = None
+    if live_obj:
+        viewers = live_obj.get("viewer_count") or live_obj.get("viewers")
+        cats = live_obj.get("categories") or []
+        if cats and isinstance(cats[0], dict):
+            category = cats[0].get("name")
+        title = live_obj.get("session_title") or live_obj.get("stream_title")
+    if category is None:
+        rc = channel.get("recentCategories") or []
+        if rc and isinstance(rc[0], dict):
+            category = rc[0].get("name")
+    return {"slug": slug, "followers": _int(followers), "is_live": is_live,
+            "viewers": _int(viewers), "category": category, "title": title}
+
+
+async def search_kick_public(store: ResearchStore, job_id: int, query: str, limit: int = 6) -> dict[str, Any]:
+    """No-credential Kick lane: resolve channels for a keyword via the public search endpoint,
+    then pull each channel's authoritative stats (followers, live status, viewers, category).
+    Stores each as evidence with the numbers under metadata.metrics so metrics.py can aggregate.
+    query may also be a direct channel slug."""
+    import anyio
+    import json as _json
+
+    query = (query or "").strip()
+    if not query:
+        raise ValueError("Provide a search term or a Kick channel slug.")
+    limit = max(1, min(limit, 15))
+
+    # 1. Discover slugs from the keyword (search covers channels + live streams).
+    status, body, url = await anyio.to_thread.run_sync(
+        lambda: _kick_get_blocking(f"/api/search?searched_word={quote(query)}"))
+    search_raw = record_raw_parts(store.database_url, job_id, "research.kick", "kick_search",
+                                  method="GET", url=url, status=status, content=body)
+    slugs: list[str] = []
+    if status == 200 and body:
+        try:
+            payload = _json.loads(body)
+        except Exception:
+            payload = {}
+        for ch in (payload.get("channels") or []):
+            if not isinstance(ch, dict):
+                continue
+            slug = ch.get("slug") or (ch.get("user") or {}).get("username")
+            if slug and slug not in slugs:
+                slugs.append(slug)
+        for ls in (payload.get("livestreams") or []):
+            if not isinstance(ls, dict):
+                continue
+            chan = ls.get("channel")
+            slug = (chan.get("slug") if isinstance(chan, dict) else None) or ls.get("slug")
+            if slug and slug not in slugs:
+                slugs.append(slug)
+    # Also try the query itself as a slug (handles "pull kick.com/<slug>" style asks).
+    candidate = re.sub(r"[^a-z0-9_]", "", query.lower())
+    if candidate and candidate not in slugs:
+        slugs.append(candidate)
+    slugs = slugs[:limit]
+
+    # 2. Pull each channel's authoritative stats.
+    stored: list[dict[str, Any]] = []
+    scanned = 0
+    raw_id = search_raw
+    for slug in slugs:
+        st, cbody, curl = await anyio.to_thread.run_sync(
+            lambda s=slug: _kick_get_blocking(f"/api/v2/channels/{s}"))
+        scanned += 1
+        rid = record_raw_parts(store.database_url, job_id, "research.kick", "kick_channel",
+                               method="GET", url=curl, status=st, content=cbody)
+        if st != 200 or not cbody:
+            continue
+        try:
+            channel = _json.loads(cbody)
+        except Exception:
+            continue
+        m = _kick_extract(channel, slug)
+        if m["followers"] is None and not m["is_live"]:
+            continue  # not a real channel result
+        chan_url = f"https://kick.com/{m['slug'] or slug}"
+        live = f"LIVE, {m['viewers'] or 0} viewers in {m['category'] or 'unknown'}" if m["is_live"] else "offline"
+        excerpt = (f"{m['slug'] or slug}: "
+                   f"{m['followers'] if m['followers'] is not None else 'unknown'} followers; {live}.")
+        metrics: dict[str, int] = {}
+        if m["followers"] is not None:
+            metrics["followers"] = m["followers"]
+        if m["viewers"] is not None:
+            metrics["viewers"] = m["viewers"]
+        result = store.add_evidence(
+            job_id, source_type="kick", url=chan_url, title=str(m["title"] or m["slug"] or slug),
+            excerpt=excerpt, query=query,
+            metadata={"entity": m["slug"] or slug, "query_shape": query, "metrics": metrics,
+                      "is_live": m["is_live"], "category": m["category"], "raw_response_id": rid,
+                      "record": channel})
+        stored.append({**result, "url": chan_url, **m})
+        raw_id = rid or raw_id
+    return {"query": query, "scanned": scanned, "matched": len(stored), "items": stored,
+            "raw_response_id": raw_id, "via": "public"}
 
 
 async def read_discord_channel(store: ResearchStore, job_id: int, bot_token: str, channel_id: str, limit: int = 50) -> dict[str, Any]:
