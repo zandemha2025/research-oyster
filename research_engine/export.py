@@ -47,6 +47,19 @@ def _slug(text: str) -> str:
     return _SLUG.sub("-", (text or "").lower()).strip("-")[:60] or "job"
 
 
+def _report_title(brief: str) -> str:
+    """A short, clean report title from the brief — its first meaningful line, stripped of markdown
+    and any 'Research brief —' prefix, so the report doesn't render the whole brief as an H1."""
+    for line in (brief or "").splitlines():
+        line = line.lstrip("#").strip()
+        if not line:
+            continue
+        line = re.sub(r"(?i)^research brief\s*[—:-]\s*", "", line)
+        line = re.sub(r"\s*\((?:internal|confidential)[^)]*\)", "", line, flags=re.I).strip(" —-")
+        return line[:100] or "Research report"
+    return "Research report"
+
+
 def _group_findings(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
     order: list[str] = []
     groups: dict[str, list[dict[str, Any]]] = {}
@@ -106,6 +119,22 @@ def export_job(store: ResearchStore, job_id: int, output_dir: Path | str = Path(
     folder.mkdir(parents=True, exist_ok=True)
 
     from reporting.tables import normalize_table
+    from reporting.biblio import build_bibliography, annotate_themes
+    from reporting.html_report import build_html
+    from reporting import charts as charts_mod
+
+    url_to_n, biblio = build_bibliography(synthesis)
+    themes = annotate_themes(synthesis, url_to_n)
+    raw_tables = synthesis.get("metrics_tables") or []
+    tables = [normalize_table(t) for t in raw_tables]
+    title = _report_title(job.get("brief", ""))
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    # Build charts up front — the HTML, docx and deck all embed them.
+    try:
+        charts = charts_mod.build_charts(raw_tables, folder / "charts")
+    except Exception:
+        charts = []
 
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR), autoescape=False)
     env.filters["cell"] = _cell
@@ -113,8 +142,11 @@ def export_job(store: ResearchStore, job_id: int, output_dir: Path | str = Path(
         job=job,
         plan=job.get("plan", {}),
         synthesis=synthesis,
-        metrics_tables=[normalize_table(t) for t in (synthesis.get("metrics_tables") or [])],
-        generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        title=title,
+        themes=themes,
+        bibliography=biblio,
+        metrics_tables=tables,
+        generated_at=generated_at,
         findings=_group_findings(evidence),
         coverage=[{"source": source, "count": count} for source, count in dossier.get("coverage", {}).items()],
         source_runs=dossier.get("source_runs", []),
@@ -128,7 +160,12 @@ def export_job(store: ResearchStore, job_id: int, output_dir: Path | str = Path(
     raw_jsonl = folder / "raw_responses.jsonl"
 
     report_md.write_text(markdown, encoding="utf-8")
-    report_html.write_text(_to_html(markdown), encoding="utf-8")
+    # The HTML is its own designed web report (not a markdown dump) — see reporting/html_report.py.
+    try:
+        html = build_html(title, synthesis, themes, tables, biblio, generated_at, charts)
+    except Exception:
+        html = _to_html(markdown)  # fallback: never fail the export over styling
+    report_html.write_text(html, encoding="utf-8")
     evidence_json.write_text(json.dumps(evidence, indent=2, default=str), encoding="utf-8")
 
     columns = ["id", "source_type", "url", "title", "excerpt", "author",
@@ -152,7 +189,8 @@ def export_job(store: ResearchStore, job_id: int, output_dir: Path | str = Path(
     # Each builder is best-effort: a failure in one (e.g. a missing optional dep) must not sink
     # the export — the core report above is already written. We collect what succeeds.
     package = _build_package(folder, job, synthesis, evidence, raw_rows,
-                             dossier.get("source_runs", []))
+                             dossier.get("source_runs", []), charts=charts, themes=themes,
+                             biblio=biblio, title=title)
     files.extend(package["files"])
 
     return {
@@ -168,7 +206,9 @@ def export_job(store: ResearchStore, job_id: int, output_dir: Path | str = Path(
 
 def _build_package(folder: Path, job: dict[str, Any], synthesis: dict[str, Any],
                    evidence: list[dict[str, Any]], raw_rows: list[dict[str, Any]],
-                   source_runs: list[dict[str, Any]]) -> dict[str, Any]:
+                   source_runs: list[dict[str, Any]], charts: list[dict[str, Any]] | None = None,
+                   themes: list[dict[str, Any]] | None = None, biblio: list[dict[str, Any]] | None = None,
+                   title: str = "") -> dict[str, Any]:
     """Emit the polished deliverables alongside the core report. Never raises — returns the files
     that were produced plus a list of warnings for anything that couldn't be built."""
     from reporting import package as pkg
@@ -176,34 +216,38 @@ def _build_package(folder: Path, job: dict[str, Any], synthesis: dict[str, Any],
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     produced: list[Path] = []
     warnings: list[str] = []
-
-    # Charts (also needed by the deck + docx), from the computed metrics tables.
-    charts: list[dict[str, Any]] = []
-    metrics_tables = (synthesis or {}).get("metrics_tables") or []
-    if metrics_tables:
+    # export_job builds charts up front and passes them in; when called standalone (charts is None)
+    # build them here so the package is complete either way.
+    if charts is None:
         try:
             from reporting import charts as charts_mod
 
-            charts = charts_mod.build_charts(metrics_tables, folder / "charts")
-            for ch in charts:
-                for key in ("png", "csv"):
-                    p = ch.get(key)
-                    if p and Path(p).exists():
-                        produced.append(Path(p))
-                        if key == "png":
-                            svg = Path(p).with_suffix(".svg")
-                            if svg.exists():
-                                produced.append(svg)
-            if any(ch.get("png") for ch in charts):
-                produced.append(folder / "charts")  # so the README/Studio can link the folder
-        except Exception as exc:  # pragma: no cover - depends on optional deps
+            charts = charts_mod.build_charts(synthesis.get("metrics_tables") or [], folder / "charts")
+        except Exception as exc:  # pragma: no cover
+            charts = []
             warnings.append(f"charts: {type(exc).__name__}: {exc}")
+    charts = charts or []
 
-    # Written report (.docx)
+    # Record the chart files for the manifest.
+    for ch in charts:
+        for key in ("png", "csv"):
+            p = ch.get(key)
+            if p and Path(p).exists():
+                produced.append(Path(p))
+                if key == "png":
+                    svg = Path(p).with_suffix(".svg")
+                    if svg.exists():
+                        produced.append(svg)
+    if any(ch.get("png") for ch in charts):
+        produced.append(folder / "charts")  # so the README/Studio can link the folder
+
+    # Written report (.docx) — designed, with the same bibliography [n] as the HTML.
     try:
         from reporting import docx_report
 
-        produced.append(docx_report.build_docx(job, synthesis, generated_at, charts, folder / "report.docx"))
+        produced.append(docx_report.build_docx(job, synthesis, generated_at, charts,
+                                               folder / "report.docx", themes=themes,
+                                               biblio=biblio, title=title))
     except Exception as exc:  # pragma: no cover
         warnings.append(f"report.docx: {type(exc).__name__}: {exc}")
 
@@ -215,10 +259,12 @@ def _build_package(folder: Path, job: dict[str, Any], synthesis: dict[str, Any],
     except Exception as exc:  # pragma: no cover
         warnings.append(f"deck.pptx: {type(exc).__name__}: {exc}")
 
-    # Numbered [n] ledger
-    sources = pkg.build_numbered_sources(synthesis, source_runs, raw_rows)
+    # Numbered [n] bibliography — prefer the deterministic one built from cited URLs (deep links).
     ledger = folder / "Sources-and-Citations.md"
-    pkg.write_sources_ledger(sources, job, ledger)
+    if biblio:
+        pkg.write_bibliography(biblio, job, ledger)
+    else:
+        pkg.write_sources_ledger(pkg.build_numbered_sources(synthesis, source_runs, raw_rows), job, ledger)
     produced.append(ledger)
 
     # raw-data/ split per connector

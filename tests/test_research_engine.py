@@ -353,8 +353,11 @@ class ExportTests(unittest.TestCase):
             self.assertIn("Glass bottles look nicer on the table", md)  # a real quoted citation
             # The cop-out is gone.
             self.assertNotIn("Gaps and how to unlock", md)
-            # HTML renders a table (the pipe in the appendix excerpt did not break the row).
-            self.assertIn("<table>", folder.joinpath("report.html").read_text())
+            # The HTML is the DESIGNED report (not a markdown dump): it leads with the answer and
+            # carries the anchored [n] bibliography.
+            html = folder.joinpath("report.html").read_text()
+            self.assertIn("prefer the glass-bottle format", html)
+            self.assertIn('id="src-1"', html)  # bibliography anchor for the cited reddit source
             # CSV re-parses and the formula-injection guard prefixed the risky cell.
             with folder.joinpath("evidence.csv").open(newline="") as handle:
                 rows = list(csv.reader(handle))

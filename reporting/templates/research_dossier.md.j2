@@ -1,6 +1,6 @@
-# {{ job.brief | cell }}
+# {{ title | cell }}
 
-_Generated {{ generated_at }} · job #{{ job.id }} · answer drawn from {{ evidence_count }} pieces of evidence across {{ coverage | length }} source types_
+_Research Oyster · {{ generated_at }} · job #{{ job.id }} · drawn from {{ evidence_count }} pieces of evidence across {{ coverage | length }} sources_
 
 {% if synthesis.point_of_view %}## Our point of view
 {{ synthesis.point_of_view }}
@@ -19,28 +19,27 @@ _Generated {{ generated_at }} · job #{{ job.id }} · answer drawn from {{ evide
 _{{ table.note | cell }}_
 {% endif %}{% endfor %}{% endif %}
 
-## Key themes
-{% if not synthesis.themes %}
+## What players are saying
+{% if not themes %}
 No distinct themes were recorded.
-{% endif %}{% for theme in synthesis.themes %}
+{% endif %}{% for theme in themes %}
 ### {{ theme.title | cell }}
 {% if theme.insight %}{{ theme.insight }}
-{% endif %}{% for c in theme.citations %}{% if c.quote and c.url %}- "{{ c.quote | cell }}" — [{{ (c.source or c.url) | cell }}]({{ c.url }})
-{% elif c.quote %}- "{{ c.quote | cell }}"{% if c.source %} — {{ c.source | cell }}{% endif %}
-{% elif c.url %}- [{{ (c.source or c.url) | cell }}]({{ c.url }})
+{% endif %}{% for c in theme.citations %}{% if c.quote %}- "{{ c.quote | cell }}"{% if c.source or c.url %} — {% if c.url %}[{{ (c.source or c.url) | cell }}]({{ c.url }}){% else %}{{ c.source | cell }}{% endif %}{% endif %}{% if c.n %} [{{ c.n }}](#src-{{ c.n }}){% endif %}
+{% elif c.url %}- [{{ (c.source or c.url) | cell }}]({{ c.url }}){% if c.n %} [{{ c.n }}](#src-{{ c.n }}){% endif %}
 {% endif %}{% endfor %}{% endfor %}
-{% if synthesis.tensions %}## Tensions and disagreement
+{% if synthesis.tensions %}## Where it splits
 {{ synthesis.tensions }}
 {% endif %}
 {% if synthesis.sentiment %}## Sentiment
 {{ synthesis.sentiment }}
 {% endif %}
-## Recommendations
+## What we'd do
 {% if not synthesis.recommendations %}
 None recorded.
 {% endif %}{% for rec in synthesis.recommendations %}- {{ rec | cell }}
 {% endfor %}
-{% if synthesis.method %}## Method — how the numbers were made
+{% if synthesis.method %}## How we got here
 {{ synthesis.method }}
 {% endif %}
 ## Confidence and limitations
@@ -48,9 +47,9 @@ None recorded.
 {% endif %}{% if synthesis.limitations %}
 {{ synthesis.limitations }}
 {% endif %}
-{% if synthesis.numbered_sources %}
+{% if bibliography %}
 ## Sources
-{% for s in synthesis.numbered_sources %}{{ '[' ~ s.n ~ ']' }} {{ s.label | cell }}{% if s.tool %} · {{ s.tool | cell }}{% endif %}{% if s.url %} · {{ s.url }}{% endif %}{% if s.pulled_at %} · pulled {{ s.pulled_at | cell }}{% endif %}{% if s.note %} — {{ s.note | cell }}{% endif %}
+{% for s in bibliography %}<a name="src-{{ s.n }}"></a>**[{{ s.n }}]** {{ s.label | cell }}{% if s.url %} — {{ s.url }}{% endif %}
 {% endfor %}{% endif %}
 
 ---

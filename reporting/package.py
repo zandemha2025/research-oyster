@@ -69,6 +69,31 @@ def write_sources_ledger(sources: list[dict[str, Any]], job: dict[str, Any], pat
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_bibliography(entries: list[dict[str, Any]], job: dict[str, Any], path: Path) -> None:
+    """Write the numbered [n] bibliography from the deterministic biblio (built from cited URLs).
+    Each entry links to the SPECIFIC source, with the quote it backs where we have one."""
+    lines = [f"# Sources & citations — {job.get('brief', '')[:80]}".rstrip(), "",
+             "Every `[n]` in the report resolves to an entry here — the exact page it came from, "
+             "linked, with the quote it supports.", ""]
+    if not entries:
+        lines.append("_No cited sources recorded._")
+    for e in entries:
+        lines.append(f"**[{e.get('n')}]** {e.get('label', '')}".rstrip())
+        if e.get("url"):
+            lines.append(f"  {e['url']}")
+        bits = []
+        if e.get("tool"):
+            bits.append(f"via `{e['tool']}`")
+        if e.get("pulled_at"):
+            bits.append(f"pulled {e['pulled_at']}")
+        if bits:
+            lines.append("  " + " · ".join(bits))
+        if e.get("quote"):
+            lines.append(f'  > "{e["quote"]}"')
+        lines.append("")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_readme(job: dict[str, Any], synthesis: dict[str, Any], manifest: list[tuple[str, str]],
                  path: Path) -> None:
     pov = synthesis.get("point_of_view") or synthesis.get("executive_answer") or ""

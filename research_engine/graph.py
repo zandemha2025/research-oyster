@@ -193,22 +193,28 @@ def synth_prompt(state: ResearchState, final: bool = False) -> str:
     parts = [
         f"SYNTHESIZE step for job {state.job_id}. Work ONLY through the research tools — do not write "
         f"code, run shells, or spawn sub-agents; you already have everything you need. First call "
-        f"get_research_dossier({state.job_id}) (a compact, readable view) to see the evidence, coverage, "
-        f"and source_runs ledger, and call compute_metric / compute_rate / analyze_chatter for numbers over "
-        f"ALL rows. Then call write_research_synthesis to author a CONSULTANT-GRADE, RESULTS-FIRST answer:",
-        "• LEAD WITH THE ANSWER AND THE NUMBERS. executive_answer directly answers the brief and puts the key "
-        "computed figures in it (with n). point_of_view states a sharp thesis — take a position, and disagree "
-        "with the brief's framing if the evidence warrants.",
-        "• metrics_tables: paste the compute_metric/compute_rate tables AND the analyze_chatter patterns "
-        "(recurring terms with counts, per-channel splits) — with n; never hand-type figures. method: state "
-        "how the numbers were made (metric, query shapes, window, min sample, any cross-check).",
-        "• ANONYMIZE speakers — refer to people by their pseudonym (user_xxxx) from analyze_chatter, never a "
-        "real handle. In confidence, report the sufficiency verdict honestly (how much substantive chatter, "
-        "saturated or not) — that is how the reader knows they can trust the answer.",
-        "• themes: each backed by real quoted evidence with URLs and by numbers where you have them; cite by [n] "
-        "into numbered_sources. recommendations: what we'd do.",
-        "• If a source was blocked, ROUTE AROUND IT with a proxy/other angle and give it ONE line — keep "
-        "limitations to a short closing caveat, never the headline. Never fabricate.",
+        f"get_research_dossier({state.job_id}) to see the evidence, coverage, and source_runs ledger, and call "
+        f"compute_metric / compute_rate / analyze_chatter for numbers over ALL rows. Then call "
+        f"write_research_synthesis to author the report.",
+        "WRITE LIKE A CONSULTANT BRIEFING AN EXECUTIVE, not an academic. The reader wants the answer, not a "
+        "statistics lesson. Rules of voice:",
+        "• Lead with the answer and a sharp point_of_view — take a position, disagree with the brief if the "
+        "evidence warrants. Confident, plain, declarative prose.",
+        "• Weave numbers into sentences NATURALLY: 'Delta Force runs 18 live squad-finding voice channels — the "
+        "only game in the set with any' — NOT 'active_voice_channels=18, n=13'. NEVER write 'n=' or expose "
+        "field names or sample-size notation in the narrative. The rigor lives under the hood.",
+        "• point_of_view / executive_answer / themes / tensions / recommendations are the story. Each theme is "
+        "backed by a real QUOTE with its specific source URL (the exact thread/article/page, never a homepage).",
+        "• Put every claim's traceable source in numbered_sources as [n] — {n, label, url (the SPECIFIC deep "
+        "link), tool, note} — and reference [n] in the prose. This is the bibliography; it must be complete.",
+        "• metrics_tables still carry the computed figures (tables may show counts), built from compute_metric / "
+        "analyze_chatter — never hand-typed. Give each a plain-English title, not a formula.",
+        "• method: ONE short section, in plain language, on how you got the findings (what you read, what you "
+        "counted, any cross-check) — skippable, not the headline. confidence: plain-English how sure and why "
+        "(you may say 'based on a modest sample' but not 'n=12').",
+        "• ANONYMIZE speakers — pseudonyms (user_xxxx) from analyze_chatter, never a real handle.",
+        "• If a source was blocked, ROUTE AROUND IT and give it ONE closing line — limitations are a short "
+        "caveat, never the headline. Never fabricate.",
     ]
     if state.named_platforms:
         parts.append(

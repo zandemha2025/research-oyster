@@ -76,12 +76,14 @@ def _metric_table(doc: Document, table: dict[str, Any]) -> None:
 
 
 def build_docx(job: dict[str, Any], synthesis: dict[str, Any], generated_at: str,
-               charts: list[dict[str, Any]] | None, path: Path) -> Path:
+               charts: list[dict[str, Any]] | None, path: Path, *,
+               themes: list[dict[str, Any]] | None = None,
+               biblio: list[dict[str, Any]] | None = None, title: str = "") -> Path:
     doc = Document()
     _style(doc)
 
-    _heading(doc, job.get("brief") or "Research report", level=1)
-    _para(doc, f"Generated {generated_at} · job #{job.get('id')}", color=_SUBTLE, size=9)
+    _heading(doc, title or job.get("brief") or "Research report", level=1)
+    _para(doc, f"Research Oyster · {generated_at} · job #{job.get('id')}", color=_SUBTLE, size=9)
 
     if synthesis.get("point_of_view"):
         _heading(doc, "Our point of view", level=2)
@@ -105,19 +107,19 @@ def build_docx(job: dict[str, Any], synthesis: dict[str, Any], generated_at: str
                 except Exception:
                     pass
 
-    themes = synthesis.get("themes") or []
+    themes = themes if themes is not None else (synthesis.get("themes") or [])
     if themes:
-        _heading(doc, "Key themes", level=1)
+        _heading(doc, "What players are saying", level=1)
         for th in themes:
             _heading(doc, th.get("title") or "Theme", level=2)
             if th.get("insight"):
                 _para(doc, th["insight"])
             for c in th.get("citations") or []:
-                quote, src, url = c.get("quote"), c.get("source"), c.get("url")
+                quote, src, n = c.get("quote"), (c.get("source") or c.get("url")), c.get("n")
                 if quote:
-                    line = f'"{quote}"' + (f" — {src or url}" if (src or url) else "")
-                elif url:
-                    line = src or url
+                    line = f'"{quote}"' + (f" — {src}" if src else "") + (f" [{n}]" if n else "")
+                elif src:
+                    line = src + (f" [{n}]" if n else "")
                 else:
                     continue
                 p = doc.add_paragraph(style="List Bullet")
@@ -151,20 +153,20 @@ def build_docx(job: dict[str, Any], synthesis: dict[str, Any], generated_at: str
         if synthesis.get("limitations"):
             _para(doc, synthesis["limitations"], color=_SUBTLE, size=10)
 
-    sources = synthesis.get("numbered_sources") or []
+    sources = biblio if biblio is not None else (synthesis.get("numbered_sources") or [])
     if sources:
         _heading(doc, "Sources", level=1)
         for s in sources:
-            bits = [f"[{s.get('n')}]", s.get("label") or ""]
-            if s.get("tool"):
-                bits.append(f"· {s['tool']}")
+            p = doc.add_paragraph()
+            run = p.add_run(f"[{s.get('n')}] {s.get('label') or ''}".rstrip())
+            run.font.size = Pt(9.5)
+            run.font.name = theme.FONT
+            run.font.color.rgb = _INK
             if s.get("url"):
-                bits.append(f"· {s['url']}")
-            if s.get("pulled_at"):
-                bits.append(f"· pulled {s['pulled_at']}")
-            if s.get("note"):
-                bits.append(f"— {s['note']}")
-            _para(doc, " ".join(str(b) for b in bits if b), size=9.5, color=_SUBTLE)
+                run2 = p.add_run(f"  {s['url']}")
+                run2.font.size = Pt(9)
+                run2.font.name = theme.FONT
+                run2.font.color.rgb = _SUBTLE
 
     path.parent.mkdir(parents=True, exist_ok=True)
     doc.save(str(path))

@@ -435,35 +435,32 @@ def write_research_synthesis(
 ) -> dict[str, Any]:
     """Author the report that answers the question, and persist it as the job's deliverable.
 
-    Write like a consultant, not a data collector: LEAD WITH THE ANSWER AND THE NUMBERS, take a
-    position, and demote what you couldn't get to one short closing paragraph. Call this once you
-    can answer the brief from the evidence — thin evidence still gets a synthesis, with the limits
-    stated honestly.
+    Write like a consultant briefing an executive, NOT an academic. The reader wants the answer,
+    not a statistics lesson. Lead with the position, weave numbers into prose naturally, and demote
+    what you couldn't get to one short closing line. Thin evidence still gets a synthesis, honestly.
 
-    - executive_answer: 2-5 sentences that directly answer the brief, with the key computed
-      numbers in them (e.g. "share rate 1.0%, n=22"). Required.
+    - executive_answer: 2-5 sentences that directly answer the brief, with the key figures woven in
+      as plain language ("Delta Force runs 18 live squad-finding voice channels — the only game in
+      the set with any"). NEVER write "n=22" or expose field names / sample-size notation. Required.
     - point_of_view: the headline POSITION — a sharp, decision-ready thesis that may disagree with
-      the brief's framing. This is what separates a consultant report from a summary. One or two
-      sentences. State it even when it pushes back on what was asked.
-    - themes: list of {"title", "insight", "citations": [{"quote", "url", "source"}]} — the key
-      findings, each backed by real quoted evidence with its URL and by numbers where you have them.
-      Cite computed figures by [n] into numbered_sources. Quote what people actually said.
-    - metrics_tables: the computed numbers, structured. Each: {"title", "unit" (e.g. "%"/"views"),
-      "group_by", "rows": [{"group", "median", "n", ...}], "note"}. Build these from compute_metric /
-      compute_rate output — never hand-type figures. Every table must carry sample sizes (n).
-    - method: how the numbers were made — the metric chosen, query shapes, window, min sample, and
-      any triangulation/verify cross-check you ran. This is what makes the numbers trustworthy.
-    - tensions: where opinion splits or evidence disagrees.
-    - sentiment: the overall mood and how it breaks down.
+      the brief's framing. This is what separates a consultant report from a summary.
+    - themes: list of {"title", "insight", "citations": [{"quote", "url", "source"}]} — each key
+      finding backed by a real QUOTE with its SPECIFIC source URL (the exact thread/article/page,
+      never a homepage). Reference sources by [n]. Quote what people actually said.
+    - metrics_tables: the computed numbers, structured. Each: {"title" (plain English, not a
+      formula), "unit", "group_by", "rows": [{"group", ...}], "note"}. Build from compute_metric /
+      compute_rate / analyze_chatter — never hand-type. Tables may show counts; the PROSE stays clean.
+    - method: ONE short, plain-language section on how you got the findings (what you read, what you
+      counted, any cross-check) — skippable, not the headline. No "n=" notation.
+    - tensions: where opinion splits. sentiment: the overall mood and how it breaks down.
     - recommendations: concrete, decision-ready next actions ("what we'd do").
-    - confidence: one honest paragraph on how confident you are and why.
-    - limitations: ONE short closing paragraph on what constrained the research — a caveat, never
-      the headline. Distinguish HONESTLY using the source_runs ledger: sources never run are "not
-      available"; sources that RAN and returned nothing usable are "attempted, returned no usable
-      data". When a source was blocked, say in one line what proxy/angle you used instead.
-    - numbered_sources: the [n] citation ledger — list of {"n", "label", "tool", "url",
-      "pulled_at", "note"} that every [n] in the report resolves to. Build from the source_runs
-      ledger and list_raw_responses.
+    - confidence: plain-English how sure and why ("based on a modest sample" is fine; "n=12" is not).
+    - limitations: ONE short closing caveat, never the headline. Distinguish honestly: sources never
+      run are "not available"; sources that RAN and returned nothing are "attempted, no usable data".
+      When a source was blocked, say in one line what proxy/angle you used instead.
+    - numbered_sources: the [n] bibliography — list of {"n", "label", "url" (the SPECIFIC deep link,
+      not a homepage), "tool", "pulled_at", "note"}. EVERY [n] in the prose must resolve here, and
+      every source you quoted must appear. This is graded as traceability — make it complete.
 
     export_research_report will refuse to run until this exists.
     """
