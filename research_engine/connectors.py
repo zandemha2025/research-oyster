@@ -7,6 +7,7 @@ from typing import Any
 import feedparser
 import html as _html
 import httpx
+import json
 import os
 import re
 import ipaddress
@@ -69,6 +70,7 @@ CONNECTOR_GUIDES: dict[str, dict[str, Any]] = {
                  "fingerprint). Optional Client ID/Secret in Setup switches to the official OAuth API.",
         "fallbacks": [
             "search_kick(query) — free: returns channel followers, live status, viewer counts, and category",
+            "read_kick_chat(channel) — free: reads a live channel's actual chat messages (Pusher websocket)",
             "search_web / search_reddit for the surrounding discussion (free)",
             "crawl_web_page on public kick.com category and channel pages",
         ],
@@ -1187,6 +1189,131 @@ def _read_twitch_chat_blocking(channel: str, seconds: int, limit: int) -> tuple[
         except Exception:
             pass
     return messages, "\n".join(transcript)
+
+
+# Kick live chat runs on Pusher (not IRC). The app key + cluster are public constants baked into
+# Kick's web client; reading a chatroom needs no login — the exact twin of the Twitch WSS reader.
+_KICK_PUSHER_APP = "32cbd69e4b950bf97679"
+_KICK_WS_URL = (f"wss://ws-us2.pusher.com/app/{_KICK_PUSHER_APP}"
+                "?protocol=7&client=js&version=8.4.0&flash=false")
+
+
+def _parse_kick_event(raw: str) -> dict[str, Any] | None:
+    """Parse one raw Kick/Pusher frame. Pure and testable.
+
+    Returns {"ping": True} for a pusher:ping (caller must pong), {"user", "text", "created_at"}
+    for a chat message, or None for anything else (subscription acks, presence, etc.)."""
+    try:
+        event = json.loads(raw)
+    except Exception:
+        return None
+    name = event.get("event", "")
+    if name == "pusher:ping":
+        return {"ping": True}
+    if name.endswith("ChatMessageEvent"):
+        data = event.get("data")
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except Exception:
+                return None
+        if not isinstance(data, dict):
+            return None
+        sender = data.get("sender") or {}
+        text = str(data.get("content") or "").strip()
+        user = sender.get("username") or sender.get("slug") or ""
+        if not text or not user:
+            return None
+        return {"user": user, "text": text, "created_at": data.get("created_at")}
+    return None
+
+
+def _read_kick_chat_blocking(chatroom_id: Any, seconds: int, limit: int) -> tuple[list[dict[str, Any]], str]:
+    """Anonymous read of a Kick chatroom's live chat over the Pusher WebSocket. Blocking — run in
+    a thread. Proxy/CA-aware like the Twitch reader (wss on :443 tunnels through HTTPS_PROXY)."""
+    import time as _time
+    import websocket  # websocket-client
+
+    kwargs: dict[str, Any] = {"timeout": 8}
+    ca_bundle = os.environ.get("SSL_CERT_FILE") or os.environ.get("REQUESTS_CA_BUNDLE")
+    if ca_bundle:
+        kwargs["sslopt"] = {"ca_certs": ca_bundle}
+    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    if proxy:
+        parsed_proxy = urlparse(proxy)
+        kwargs.update(http_proxy_host=parsed_proxy.hostname, http_proxy_port=parsed_proxy.port, proxy_type="http")
+
+    messages: list[dict[str, Any]] = []
+    transcript: list[str] = []
+    ws = websocket.create_connection(_KICK_WS_URL, **kwargs)
+    try:
+        ws.settimeout(2.0)
+        ws.send(json.dumps({"event": "pusher:subscribe",
+                            "data": {"auth": "", "channel": f"chatrooms.{chatroom_id}.v2"}}))
+        deadline = _time.monotonic() + max(2, min(seconds, 40))
+        while _time.monotonic() < deadline and len(messages) < limit:
+            try:
+                data = ws.recv()
+            except websocket.WebSocketTimeoutException:
+                continue
+            except Exception:
+                break
+            if not data:
+                continue
+            transcript.append(str(data))
+            parsed = _parse_kick_event(str(data))
+            if not parsed:
+                continue
+            if parsed.get("ping"):
+                ws.send(json.dumps({"event": "pusher:pong", "data": {}}))
+            elif "text" in parsed:
+                messages.append(parsed)
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+    return messages, "\n".join(transcript)
+
+
+async def read_kick_chat(store: ResearchStore, job_id: int, channel: str,
+                         seconds: int = 12, limit: int = 200) -> dict[str, Any]:
+    """Read a Kick channel's LIVE chat via its public Pusher websocket (no credentials). Resolves
+    the channel's chatroom id, then reads messages and stores each as source_type='kick_chat'
+    evidence. An empty result usually means the channel is offline or chat was quiet during the
+    listening window — 'attempted, no usable data', not a missing capability."""
+    import anyio
+
+    slug = re.sub(r"[^a-z0-9_]", "", (channel or "").lstrip("#").lower().strip())
+    if not slug:
+        raise ValueError("Provide a Kick channel name, for example 'xqc'.")
+    status, body, _ = await anyio.to_thread.run_sync(lambda: _kick_get_blocking(f"/api/v2/channels/{slug}"))
+    if status != 200 or not body:
+        raise ValueError(f"Could not load the Kick channel '{slug}' (HTTP {status}).")
+    try:
+        chatroom_id = (json.loads(body).get("chatroom") or {}).get("id")
+    except Exception:
+        chatroom_id = None
+    if not chatroom_id:
+        raise ValueError(f"Kick channel '{slug}' has no readable chatroom.")
+    messages, transcript = await anyio.to_thread.run_sync(
+        lambda: _read_kick_chat_blocking(chatroom_id, seconds, limit))
+    raw_id = record_raw_parts(
+        store.database_url, job_id, "research.kick_chat", "kick_pusher",
+        method="WSS", url=f"{_KICK_WS_URL}#chatrooms.{chatroom_id}.v2", status=200,
+        content=transcript.encode("utf-8", "replace"),
+    )
+    stored = []
+    for message in messages:
+        row = store.add_evidence(
+            job_id, source_type="kick_chat", url=f"https://kick.com/{slug}",
+            title=f"Kick {slug} chat", excerpt=message["text"], author=message["user"], query=slug,
+            metadata={"channel": slug, "chatroom_id": chatroom_id,
+                      "created_at": message.get("created_at"), "raw_response_id": raw_id},
+        )
+        stored.append({"user": message["user"], "text": message["text"], "evidence_id": row["evidence_id"]})
+    return {"channel": slug, "chatroom_id": chatroom_id, "matched": len(stored), "items": stored,
+            "raw_response_id": raw_id}
 
 
 async def read_twitch_chat(store: ResearchStore, job_id: int, channel: str,

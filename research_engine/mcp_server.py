@@ -18,6 +18,7 @@ from research_engine.connectors import apify_collect as apify_collect_connector
 from research_engine.connectors import search_kick as search_kick_connector
 from research_engine.connectors import search_twitch as search_twitch_connector
 from research_engine.connectors import read_twitch_chat as read_twitch_chat_connector
+from research_engine.connectors import read_kick_chat as read_kick_chat_connector
 from research_engine.connectors import crawl_web_page as crawl_web_connector
 from research_engine.connectors import search_web as search_web_connector
 from research_engine.connectors import discover_sources as discover_sources_connector
@@ -227,6 +228,18 @@ async def read_twitch_chat(job_id: int, channel: str, seconds: int = 8, limit: i
     """
     return await _tracked("twitch_chat", job_id, channel,
                           read_twitch_chat_connector(store, job_id, channel, seconds, limit))
+
+
+@mcp.tool()
+async def read_kick_chat(job_id: int, channel: str, seconds: int = 12, limit: int = 200) -> dict[str, Any]:
+    """Read a Kick channel's LIVE chat via its public Pusher websocket — no credentials, no API key.
+
+    The Kick twin of read_twitch_chat. Give a channel slug (e.g. 'xqc'); Oyster resolves the
+    chatroom, listens for a few seconds, and stores each chat message as evidence. An empty
+    result means the channel was offline or chat was quiet during the window.
+    """
+    return await _tracked("kick_chat", job_id, channel,
+                          read_kick_chat_connector(store, job_id, channel, seconds, limit))
 
 
 @mcp.tool()

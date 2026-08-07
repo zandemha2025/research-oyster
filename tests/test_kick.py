@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from research_engine.connectors import _kick_extract
+import json
+
+from research_engine.connectors import _kick_extract, _parse_kick_event
 
 
 class KickExtractTests(unittest.TestCase):
@@ -40,6 +42,31 @@ class KickExtractTests(unittest.TestCase):
                            "livestream": {"viewer_count": "42"}})
         self.assertEqual(m["followers"], 1500)
         self.assertEqual(m["viewers"], 42)
+
+
+class KickChatParseTests(unittest.TestCase):
+    def test_parses_chat_message_event(self):
+        frame = json.dumps({"event": "App\\Events\\ChatMessageEvent",
+                            "data": json.dumps({"content": "gg wp", "created_at": "2026-08-07T00:00:00Z",
+                                                "sender": {"username": "viewer1"}})})
+        self.assertEqual(_parse_kick_event(frame),
+                         {"user": "viewer1", "text": "gg wp", "created_at": "2026-08-07T00:00:00Z"})
+
+    def test_ping_frame(self):
+        self.assertEqual(_parse_kick_event(json.dumps({"event": "pusher:ping", "data": {}})), {"ping": True})
+
+    def test_ignores_subscription_ack_and_junk(self):
+        self.assertIsNone(_parse_kick_event(json.dumps(
+            {"event": "pusher_internal:subscription_succeeded", "data": "{}"})))
+        self.assertIsNone(_parse_kick_event("not json at all"))
+
+    def test_ignores_empty_content_or_missing_user(self):
+        blank = json.dumps({"event": "App\\Events\\ChatMessageEvent",
+                            "data": json.dumps({"content": "  ", "sender": {"username": "u"}})})
+        nouser = json.dumps({"event": "App\\Events\\ChatMessageEvent",
+                             "data": json.dumps({"content": "hi", "sender": {}})})
+        self.assertIsNone(_parse_kick_event(blank))
+        self.assertIsNone(_parse_kick_event(nouser))
 
 
 if __name__ == "__main__":

@@ -87,7 +87,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             {"create_research_job", "add_evidence", "fetch_rss", "search_x", "inspect_discord_invite",
              "discord_landscape", "discord_widget",
-             "run_apify_actor", "apify_collect", "search_twitch", "read_twitch_chat", "search_kick", "read_discord_channel",
+             "run_apify_actor", "apify_collect", "search_twitch", "read_twitch_chat", "search_kick", "read_kick_chat", "read_discord_channel",
              "crawl_web_page", "search_web", "discover_sources", "search_reddit", "fetch_reddit_thread",
              "get_research_dossier", "list_research_jobs", "connector_status",
              "list_metric_fields", "compute_metric", "compute_rate",

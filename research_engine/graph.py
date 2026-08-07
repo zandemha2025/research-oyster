@@ -130,9 +130,10 @@ def collect_prompt(lane: str, state: ResearchState) -> str:
             f'"{brief}" right now (no creds). Store real data via add_evidence. Do not synthesize.'
         ),
         "kick": (
-            f'COLLECT step (Kick) for job {j}. PREFER search_kick(query="…") — it works with NO key and returns '
-            f'channel followers, live status, viewer counts, and category WITH numbers about "{brief}". '
-            f'apify_collect(platform="kick", …) is the paid alternative. Store via add_evidence. Do not synthesize.'
+            f'COLLECT step (Kick) for job {j}. NO key needed: search_kick(query="…") returns channel followers, '
+            f'live status, viewer counts, and category WITH numbers about "{brief}"; then read_kick_chat(channel) '
+            f'reads the ACTUAL live chat messages of any channel that is streaming on-topic. apify_collect'
+            f'(platform="kick", …) is the paid alternative. Store via add_evidence. Do not synthesize.'
         ),
         "discord": (
             f'COLLECT step (Discord) for job {j}. Get the most Discord signal WITHOUT any token by stacking public '
