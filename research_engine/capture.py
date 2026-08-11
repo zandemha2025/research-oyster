@@ -346,9 +346,11 @@ class CaptureStore:
         job_id = int(capture["job_id"])
         source_label = str(capture.get("source_type", "web"))
         family = _source_family(url)
-        question = str(capture.get("research_question", ""))
+        # JSON null from the extension becomes Python None; str(None) == "None" would falsely fail
+        # the plan-membership check below. Treat null/missing as empty.
+        question = str(capture.get("research_question") or "")
         anonymize = bool(capture.get("anonymize", True))
-        author = str(capture.get("author", ""))[:500]
+        author = str(capture.get("author") or "")[:500]
         alias = f"Participant {hashlib.sha256(f'{job_id}:{author}'.encode()).hexdigest()[:8]}" if anonymize and author else ""
         captured = _captured_at(capture.get("captured_at"))
         with connect(self.database_url) as conn, conn.cursor() as cur:
