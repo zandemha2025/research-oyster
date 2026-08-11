@@ -55,7 +55,15 @@ def capture_store() -> CaptureStore:
 
 
 def extension_id_from_origin(origin: str) -> str:
-    match = EXTENSION_ORIGIN.fullmatch(origin.strip())
+    origin = (origin or "").strip()
+    # Browsers omit the Origin header on many GET requests the extension makes (Origin is only
+    # guaranteed on CORS/POST). An absent Origin previously 403'd every such call -> the extension
+    # showed "Unavailable" even when correctly paired. The request is still gated by the loopback
+    # Host check AND a valid bearer token (which only the paired extension holds), so an absent
+    # Origin is allowed; a PRESENT origin must still be a real chrome-extension origin.
+    if not origin:
+        return ""
+    match = EXTENSION_ORIGIN.fullmatch(origin)
     if not match:
         raise PermissionError("Open this request from the paired Oyster browser extension.")
     return match.group(1)
