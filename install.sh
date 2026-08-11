@@ -18,7 +18,11 @@
 set -euo pipefail
 
 REPO_URL="${OYSTER_REPO:-https://github.com/zandemha2025/research-oyster.git}"
-BRANCH="${OYSTER_BRANCH:-main}"
+# DEMO/STUDIO BRANCH: this installer ships the live Studio UI, which lives on the
+# claude/demo-prep-p0iazw branch until it is merged to main. Default to that branch so the
+# single-line curl below installs Studio (not the old control center on main).
+# >>> AT MERGE TO MAIN: reset this default back to "main". <<<
+BRANCH="${OYSTER_BRANCH:-claude/demo-prep-p0iazw}"
 DEST="${OYSTER_HOME:-$HOME/research-oyster}"
 DB_NAME="gaming_pulse"
 

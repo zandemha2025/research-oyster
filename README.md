@@ -21,10 +21,12 @@ Audience, market, time period, required platforms, exclusions, and output format
 On macOS or Linux, paste this into a terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/claude/demo-prep-p0iazw/install.sh | bash
 ```
 
-It downloads Oyster, installs Python and PostgreSQL if they are missing, creates and migrates a local database, attaches Oyster to Claude Code / Codex, and opens the control center. It is safe to re-run and never overwrites an existing `.env` or database. (macOS needs [Homebrew](https://brew.sh); the script tells you if it is missing.) Then restart your AI host and ask: “Use Research Oyster to research …”.
+This installs the current **Studio** build (the live chat UI) and opens Studio when it finishes — not the older control center. It downloads Oyster, installs Python and PostgreSQL if they are missing, creates and migrates a local database, and attaches Oyster to Claude Code / Codex. It is safe to re-run and never overwrites an existing `.env` or database. (macOS needs [Homebrew](https://brew.sh); the script tells you if it is missing.) Then restart your AI host and ask: “Use Research Oyster to research …”.
+
+> Studio currently lives on the `claude/demo-prep-p0iazw` branch (the command above installs it). The plain `…/main/install.sh` one-liner installs the older control-center build instead — use the command above to get Studio.
 
 ## Manual setup on macOS
 
