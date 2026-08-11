@@ -84,6 +84,15 @@ fi
 # Load a token from .env if present so the SDK subprocess inherits it.
 set -a; [ -f .env ] && . ./.env >/dev/null 2>&1 || true; set +a
 
+# 4.5 Capture bridge (for browser capture) — auto-start, silent, self-healing -----
+# So Discord / X / Twitch logged-in capture "just works": you never open a second window,
+# type another command, or fight a stuck port. It runs quietly in the background and clears
+# any stale copy of itself on startup. Nothing pops up — you only ever see the Studio window.
+if [ -x .venv/bin/python ]; then
+  OYSTER_NO_BROWSER=1 nohup .venv/bin/python control_center.py >/tmp/research-oyster-capture.log 2>&1 &
+  ok "capture bridge ready (browser capture available whenever you want it)"
+fi
+
 # 5. Launch --------------------------------------------------------------------
 echo
 ok "starting… your browser will open at http://127.0.0.1:8770/"

@@ -144,14 +144,28 @@ async function loadJobs() {
     const data = await api("/api/capture/jobs");
     const jobs = Array.isArray(data) ? data : (data.jobs || []);
     $("#job").innerHTML = '<option value="">Choose a job…</option>' + jobs.map(job => `<option value="${escapeHtml(job.id)}">${escapeHtml(job.title || job.brief || `Job ${job.id}`)}</option>`).join("");
+    // Auto-pick so nobody has to fiddle: if there's exactly one job, select it. Otherwise keep
+    // the previous choice if it still exists.
+    if (!state.activeJobId && jobs.length === 1) state.activeJobId = String(jobs[0].id);
     $("#job").value = String(state.activeJobId || "");
-    if (state.activeJobId) {
-      state.activeJobTitle = $("#job").selectedOptions[0]?.textContent || state.activeJobTitle;
-      await chrome.storage.local.set({activeJobTitle:state.activeJobTitle});
-    }
+    if ($("#job").value !== String(state.activeJobId || "")) state.activeJobId = "";  // previous job is gone
     renderStatus(true);
-    if (state.activeJobId) await loadMission();
-  } catch (error) { show(error.message, "error"); renderStatus(false); }
+    if (!jobs.length) {
+      // The #1 confusion: paired but the dropdown is empty because no research job exists yet.
+      // Say so plainly instead of doing nothing.
+      $("#mission").textContent = "No research job yet. Type a brief in Studio (the localhost:8770 window), then click ↻ Refresh here.";
+      show("No research job yet — create one in Studio, then click ↻ Refresh.", "success");
+    } else if (state.activeJobId) {
+      state.activeJobTitle = $("#job").selectedOptions[0]?.textContent || state.activeJobTitle;
+      await chrome.storage.local.set({activeJobId:state.activeJobId, activeJobTitle:state.activeJobTitle});
+      await loadMission();
+    } else {
+      $("#mission").textContent = "Pick your research job above to start capturing into it.";
+    }
+  } catch (error) {
+    renderStatus(false);
+    show("Oyster isn't running. Start it (the “Research Oyster Studio” desktop icon, or ./studio), then click ↻.", "error");
+  }
   finally { setBusy(false); }
 }
 

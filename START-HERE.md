@@ -39,27 +39,20 @@ Watch it work live, then read the report. **That's the whole product for normal 
 
 ## Part 2 — Discord capture (optional, only for logged-in servers)
 
-This is the only thing that needs the extra pieces. Do it in order.
+**`./studio` already starts the capture helper for you** — in the background, silently. You do **not** run a second command or open a second window anymore. There's a one-time pairing, then it just works.
 
-**4. Start the Control Center** in a *second* terminal (leave Studio running):
+**First time only — pair the extension (once, ever):**
 
-```sh
-cd ~/research-oyster && .venv/bin/python control_center.py
-```
+1. **Load the extension:** in Chrome, go to `chrome://extensions` → turn on **Developer mode** (top-right) → click **Load unpacked** → select `~/research-oyster/browser_extension`.
+2. **Pair it:** open `http://127.0.0.1:8765` in a tab (that's the capture helper Studio started) → click **Create one-time pairing code** → click the Oyster extension icon → **Pairing & settings** → paste the code. Leave the address as `http://127.0.0.1:8765`. You'll see **"Browser paired."** You never do this again.
 
-A new tab opens at **`localhost:8765`** with a **"Set up browser capture"** panel.
+**Every time you want Discord chatter:**
 
-**5. Load the extension** (one time only): in Chrome, go to `chrome://extensions` → turn on **Developer mode** (top-right) → click **Load unpacked** → select the folder `~/research-oyster/browser_extension`.
+3. **Make a job.** In **Studio** (`localhost:8770`), type a brief like *"What are people saying in [that Discord community]?"* and send it.
+4. **Open Discord** in the same Chrome — a server + channel **you're a member of**.
+5. **Capture.** Click the **Oyster extension icon**. It **auto-picks your job** (if you have just one). Click **Find visible candidates** → review → **Approve & save**. The messages land in your Studio job.
 
-**6. Pair them:** on the Control Center's capture panel, click **Create one-time pairing code**. Then click the Oyster extension icon → **Pairing & settings** → paste that code. Leave the address as `http://127.0.0.1:8765`.
-
-**7. Make a job to capture into:** back in **Studio**, type a brief like *"Research what people are saying in [that Discord community]."* That creates the job the Discord messages will save into.
-
-**8. Open Discord:** in that same Chrome, log into Discord and open a server + channel **you're a member of**.
-
-**9. Capture:** click the **Oyster extension icon** → pick your job from the list → click **Find visible candidates** (it grabs the messages on screen) → review them → click **Approve & save**. Those messages now land in your Studio job.
-
-That's it — the captured Discord messages show up in the same job's evidence back in Studio.
+If the extension badge ever says red **"Unavailable,"** it just means Studio isn't running — start it with `./studio` (or the Desktop icon) and click **↻** in the extension. If the job dropdown is empty, you haven't made a job yet — do step 3.
 
 ### The honest limits (good to know, and to say out loud in a demo)
 - It only sees servers **you're in** and channels **you can view** — your own logged-in session, no burner account, no evasion.

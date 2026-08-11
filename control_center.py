@@ -630,14 +630,44 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"error": friendly_error(str(exc))}, 400)
 
 
+def _reap_stale_capture_server() -> None:
+    """If a previous capture bridge is still holding the port (e.g. a detached process left over
+    from an earlier run — the classic 'port already in use' zombie), stop it so this one can
+    bind. Only ever kills a process whose command line is our own control_center — never an
+    unrelated app that happens to be on the port."""
+    try:
+        pids = subprocess.run(["lsof", "-ti", f"tcp:{CAPTURE_PORT}"],
+                              capture_output=True, text=True, timeout=5).stdout.split()
+    except Exception:
+        return
+    for pid in [p for p in pids if p.strip().isdigit()]:
+        try:
+            cmd = subprocess.run(["ps", "-p", pid, "-o", "command="],
+                                 capture_output=True, text=True, timeout=5).stdout
+            if "control_center" in cmd and int(pid) != os.getpid():
+                os.kill(int(pid), 9)
+        except Exception:
+            pass
+    time.sleep(1)
+
+
 def main() -> None:
     try:
         server = ThreadingHTTPServer(("127.0.0.1", CAPTURE_PORT), Handler)
-    except OSError as exc:
-        raise SystemExit(f"Research Oyster could not start because local port {CAPTURE_PORT} is already in use. Close the other local process and try again.") from exc
+    except OSError:
+        # A stale capture bridge is probably holding the port. Clear it and try once more, so the
+        # user never has to hunt down a zombie process by hand.
+        _reap_stale_capture_server()
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", CAPTURE_PORT), Handler)
+        except OSError as exc:
+            raise SystemExit(f"Research Oyster could not start because local port {CAPTURE_PORT} is in use by another app (not Oyster). Close that app and try again.") from exc
     url = f"http://127.0.0.1:{server.server_port}/"
     print(f"Research Oyster is open at {url}")
-    threading.Timer(0.5, webbrowser.open, args=(url,)).start()
+    # Skip auto-opening a browser tab when running as the background capture bridge (started by
+    # ./studio) — the user only ever sees the Studio window, never this helper.
+    if os.environ.get("OYSTER_NO_BROWSER") != "1":
+        threading.Timer(0.5, webbrowser.open, args=(url,)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
