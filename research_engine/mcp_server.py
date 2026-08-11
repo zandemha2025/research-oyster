@@ -12,6 +12,7 @@ from research_engine.connectors import search_x as search_x_connector
 from research_engine.connectors import inspect_discord_invite as inspect_discord_connector
 from research_engine.connectors import discord_widget as discord_widget_connector
 from research_engine.connectors import discord_landscape as discord_landscape_connector
+from research_engine import discord_reach
 from research_engine.connectors import read_discord_channel as read_discord_connector
 from research_engine.connectors import run_apify_actor as run_apify_connector
 from research_engine.connectors import apify_collect as apify_collect_connector
@@ -176,6 +177,40 @@ async def discord_landscape(job_id: int, topic: str, limit: int = 6) -> dict[str
     message content."""
     return await _tracked("discord_landscape", job_id, topic,
                           discord_landscape_connector(store, job_id, topic, limit))
+
+
+@mcp.tool()
+async def plan_discord_capture(job_id: int, topic: str, search_terms: list[str] | None = None,
+                               limit: int = 6) -> dict[str, Any]:
+    """Turn a topic into an AIMED, click-to-open Discord capture plan, and arm hands-free capture.
+
+    Discord has no cross-server search and its messages need membership, so Oyster never bots it.
+    Instead this: (1) discovers the hub servers for the topic with member/online counts; (2) chooses
+    the terms to type into Discord's own search bar — YOU (the agent) know the good ones, so pass
+    them in `search_terms` (entities, synonyms, the phrases a fan would use); a heuristic fallback is
+    used if you omit them; (3) arms a browser-traffic capture session for discord.com so that once
+    the user opens a server and runs the search, the extension captures the results as raw data.
+
+    The returned `plan` is a short, human-facing, CLICKABLE list to show the user verbatim: which
+    servers to open, which terms to search, which channels to browse. The user clicks + searches (a
+    person browsing their own servers — never a self-bot); Oyster captures. Tell them to approve the
+    capture once in the extension (or trust discord.com), then click, search, and scroll."""
+    landscape = await _tracked("discord_landscape", job_id, topic,
+                               discord_landscape_connector(store, job_id, topic, limit))
+    communities = landscape.get("communities", []) if isinstance(landscape, dict) else []
+    top = discord_reach.top_communities(communities, n=3)
+    channels = discord_reach.suggest_channels(topic)
+    terms = [str(t).strip() for t in (search_terms or []) if str(t).strip()] or discord_reach.search_terms(topic)
+    session = None
+    try:
+        session = CaptureStore(settings.database_url).request_session(
+            job_id, "discord.com",
+            f"Capture on-topic messages about “{topic}” from Discord channels you open and search.")
+    except Exception:
+        session = None
+    plan = discord_reach.format_capture_plan(topic, top, channels, terms, armed=bool(session))
+    return {"topic": topic, "communities": top, "suggested_channels": channels,
+            "search_terms": terms, "session": session, "plan": plan}
 
 
 @mcp.tool()
