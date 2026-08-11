@@ -378,12 +378,27 @@ async def _drive(client: "csdk.ClaudeSDKClient", emit, timeout: int = 180) -> di
     return res
 
 
+def _is_capture_setup(message: str) -> bool:
+    """A Discord/browser capture-SETUP request should run as a single agent turn (create a job +
+    call plan_discord_capture and show the plan) — NOT the full research pipeline. Without this, a
+    fresh 'set up Discord capture' ask launches the whole plan→discover→collect→…→export graph and
+    ignores the actual request."""
+    m = (message or "").lower()
+    if "plan_discord_capture" in m:
+        return True
+    if "discord" in m and any(k in m for k in (
+            "capture", "set up", "setup", "servers to open", "search terms", "which servers",
+            "server list", "channels to open")):
+        return True
+    return False
+
+
 async def _run_agent(conv: Conversation, message: str) -> None:
-    """Dispatch a user turn: a fresh research ask runs the full graph pipeline; a follow-up
-    on an existing job runs a single conversational agent turn."""
+    """Dispatch a user turn: a capture-setup ask or a follow-up on an existing job runs a single
+    agent turn (it can call one tool and stop); any other fresh research ask runs the full graph."""
     conv.busy = True
     try:
-        if conv.job_ids:
+        if conv.job_ids or _is_capture_setup(message):
             await _conversational_turn(conv, message)
         else:
             await _run_research_graph(conv, message)
