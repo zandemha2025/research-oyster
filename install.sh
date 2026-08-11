@@ -3,6 +3,10 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | bash
 #
+# To install a specific branch (e.g. the current Studio build before it's merged to main), set
+# OYSTER_BRANCH — this is what docs/STUDIO.md instructs for the Studio:
+#   curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | OYSTER_BRANCH=claude/demo-prep-p0iazw bash
+#
 # Downloads Oyster, installs Python + PostgreSQL if they are missing, creates and migrates a
 # local database, and attaches Oyster to Claude Code / Codex. Safe to re-run: it updates in
 # place and never overwrites an existing .env or database.
@@ -14,7 +18,11 @@
 set -euo pipefail
 
 REPO_URL="${OYSTER_REPO:-https://github.com/zandemha2025/research-oyster.git}"
-BRANCH="${OYSTER_BRANCH:-main}"
+# DEMO/STUDIO BRANCH: this installer ships the live Studio UI, which lives on the
+# claude/demo-prep-p0iazw branch until it is merged to main. Default to that branch so the
+# single-line curl below installs Studio (not the old control center on main).
+# >>> AT MERGE TO MAIN: reset this default back to "main". <<<
+BRANCH="${OYSTER_BRANCH:-claude/demo-prep-p0iazw}"
 DEST="${OYSTER_HOME:-$HOME/research-oyster}"
 DB_NAME="gaming_pulse"
 
@@ -63,9 +71,11 @@ fi
 # --- get the code -----------------------------------------------------------------------
 if [ -d "$DEST/.git" ]; then
   info "Updating existing install…"
+  # Fetch the branch and reset to FETCH_HEAD: a clone that was single-branch on a
+  # different branch won't have an origin/<branch> ref to reset to, but FETCH_HEAD
+  # always points at what we just fetched.
   git -C "$DEST" fetch --depth 1 origin "$BRANCH"
-  git -C "$DEST" checkout "$BRANCH" >/dev/null 2>&1 || true
-  git -C "$DEST" reset --hard "origin/$BRANCH"
+  git -C "$DEST" checkout -B "$BRANCH" FETCH_HEAD >/dev/null 2>&1
 else
   info "Downloading Oyster…"
   git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$DEST"
@@ -124,6 +134,15 @@ info "Installing Python packages…"
 .venv/bin/python -m pip install --quiet -r requirements.txt
 ok "Packages installed"
 
+# --- studio env (the live chat UI; separate venv, see docs/STUDIO.md) --------------------
+if [ -f requirements-studio.txt ]; then
+  [ -d .venv-studio ] || python3 -m venv .venv-studio
+  info "Installing Studio packages…"
+  .venv-studio/bin/python -m pip install --quiet --upgrade pip
+  .venv-studio/bin/python -m pip install --quiet -r requirements-studio.txt
+  ok "Studio ready"
+fi
+
 # --- .env (never overwrite an existing one) ---------------------------------------------
 if [ ! -f .env ]; then
   umask 077
@@ -161,22 +180,47 @@ if command -v codex >/dev/null 2>&1; then
 fi
 [ -n "$ATTACHED" ] && ok "Attached to $ATTACHED" || warn "No Claude Code or Codex CLI found — install one, then re-run to attach."
 
+# --- desktop launcher (double-click, no terminal typing) --------------------------------
+chmod +x "$DEST/studio" "$DEST/Research Oyster Studio.command" 2>/dev/null || true
+if [ "$PLATFORM" = "macos" ]; then
+  ln -sf "$DEST/Research Oyster Studio.command" "$HOME/Desktop/Research Oyster Studio.command" 2>/dev/null \
+    && ok "Added 'Research Oyster Studio' to your Desktop — double-click it any time" || true
+elif [ -n "${DISPLAY:-}" ] && [ -d "$HOME/Desktop" ]; then
+  cat > "$HOME/Desktop/research-oyster-studio.desktop" <<EOF 2>/dev/null || true
+[Desktop Entry]
+Type=Application
+Name=Research Oyster Studio
+Exec=$DEST/studio
+Terminal=true
+EOF
+  chmod +x "$HOME/Desktop/research-oyster-studio.desktop" 2>/dev/null || true
+  ok "Added a Studio launcher to your Desktop"
+fi
+
 # --- done -------------------------------------------------------------------------------
 echo
 bold "Research Oyster is installed."
 echo
-echo "  Open the dashboard any time:"
-echo "      \"$DEST/.venv/bin/python\" \"$DEST/control_center.py\""
+echo "  Start the Studio — just double-click on your Desktop:"
+echo "      \"Research Oyster Studio\""
+echo "  …or from a terminal:"
+echo "      cd \"$DEST\" && ./studio"
 echo
-echo "  Use it in your AI host (restart it first):"
+echo "  Or use it in your AI host (restart it first):"
 echo "      \"Use Research Oyster to research …\""
 echo
 echo "  Optional browser capture — load the extension once:"
 echo "      Chrome/Edge → Extensions → Developer mode → Load unpacked → $DEST/browser_extension"
 echo
 
-# Launch the dashboard now so the browser opens (best-effort; ignore if headless).
+# Open the Studio now so the browser lands on the right place — NOT the old dashboard.
+# Only auto-open when already signed in (a background launch can't do the interactive
+# sign-in); otherwise tell the user to double-click the Desktop icon, which can.
 if [ "$PLATFORM" = "macos" ] || [ -n "${DISPLAY:-}" ]; then
-  info "Opening the dashboard…"
-  nohup "$DEST/.venv/bin/python" "$DEST/control_center.py" >/tmp/research-oyster.log 2>&1 &
+  if command -v claude >/dev/null 2>&1 && claude auth status 2>/dev/null | grep -q '"loggedIn": *true'; then
+    info "Opening Research Oyster Studio…"
+    OYSTER_NO_BROWSER=0 nohup "$DEST/studio" >/tmp/research-oyster-studio.log 2>&1 &
+  else
+    info "Double-click 'Research Oyster Studio' on your Desktop to start."
+  fi
 fi

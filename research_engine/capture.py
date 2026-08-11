@@ -185,7 +185,7 @@ class CaptureStore:
         if not job:
             raise ValueError(f"Research job {job_id} was not found.")
         plan = job["plan"]
-        terms = list(dict.fromkeys(plan.get("entities_and_terms", []) + [q for values in plan.get("source_queries", {}).values() for q in values]))
+        terms = list(dict.fromkeys(plan.get("entities_and_terms", []) + plan.get("angles", [])))
         return {
             "job_id": job["id"],
             "brief": job["brief"],

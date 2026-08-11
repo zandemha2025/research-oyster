@@ -1,43 +1,93 @@
-# Research dossier: {{ job.brief | cell }}
+# {{ title | cell }}
 
-_Generated {{ generated_at }} · job #{{ job.id }} · {{ evidence_count }} evidence items across {{ coverage | length }} sources_
+_Research Oyster · {{ generated_at }} · job #{{ job.id }} · drawn from {{ evidence_count }} pieces of evidence across {{ coverage | length }} sources_
+
+{% if synthesis.point_of_view %}## Our point of view
+{{ synthesis.point_of_view }}
+
+{% endif %}{% if synthesis.key_takeaways %}## At a glance
+{% for t in synthesis.key_takeaways %}- **{{ t | cell }}**
+{% endfor %}
+{% endif %}## Executive answer
+{{ synthesis.executive_answer }}
+{% if metrics_tables %}
+## The numbers
+{% for table in metrics_tables %}
+### {{ table.title | cell }}{% if table.unit %} ({{ table.unit | cell }}){% endif %}
+
+| {% for h in table.header %}{{ h | cell }} | {% endfor %}
+|{% for h in table.header %}---|{% endfor %}
+{% for row in table.body %}| {% for cell in row %}{{ cell | cell }} | {% endfor %}
+{% endfor %}{% if table.note %}
+_{{ table.note | cell }}_
+{% endif %}{% endfor %}{% endif %}
+
+## What people are saying
+{% if not themes %}
+No distinct themes were recorded.
+{% endif %}{% for theme in themes %}
+### {{ theme.title | cell }}
+{% if theme.insight %}{{ theme.insight }}
+{% endif %}{% for c in theme.citations %}{% if c.quote %}- "{{ c.quote | cell }}"{% if c.source or c.url %} — {% if c.url %}[{{ (c.source or c.url) | cell }}]({{ c.url }}){% else %}{{ c.source | cell }}{% endif %}{% endif %}{% if c.n %} [{{ c.n }}](#src-{{ c.n }}){% endif %}
+{% elif c.url %}- [{{ (c.source or c.url) | cell }}]({{ c.url }}){% if c.n %} [{{ c.n }}](#src-{{ c.n }}){% endif %}
+{% endif %}{% endfor %}{% endfor %}
+{% if synthesis.tensions %}## Where it splits
+{{ synthesis.tensions }}
+{% endif %}
+{% if synthesis.sentiment %}## Sentiment
+{{ synthesis.sentiment }}
+{% endif %}
+## What we'd do
+{% if not synthesis.recommendations %}
+None recorded.
+{% endif %}{% for rec in synthesis.recommendations %}- {{ rec | cell }}
+{% endfor %}
+{% if synthesis.method %}## How we got here
+{{ synthesis.method }}
+{% endif %}
+## Confidence and limitations
+{% if synthesis.confidence %}{{ synthesis.confidence }}
+{% endif %}{% if synthesis.limitations %}
+{{ synthesis.limitations }}
+{% endif %}
+{% if bibliography %}
+## Sources
+{% for s in bibliography %}<a name="src-{{ s.n }}"></a>**[{{ s.n }}]** {{ s.label | cell }}{% if s.url %} — {{ s.url }}{% endif %}
+{% endfor %}{% endif %}
+
+---
+
+## Appendix A — job details
 
 | Field | Value |
 |---|---|
-| Decision | {{ job.decision or "—" | cell }} |
-| Market | {{ job.market or "—" | cell }} |
-| Time horizon | {{ job.time_horizon or "—" | cell }} |
+| Decision | {{ (job.decision or "—") | cell }} |
+| Market | {{ (job.market or "—") | cell }} |
+| Time horizon | {{ (job.time_horizon or "—") | cell }} |
 | Status | {{ job.status | cell }} |
 | Created | {{ job.created_at | cell }} |
 
-## Research questions
-{% for question in plan.research_questions %}- {{ question | cell }}
-{% endfor %}
-## Recommended sources
-{% for source in plan.recommended_sources %}- {{ source | cell }}
-{% endfor %}
-## Query families
-{% for query in plan.query_families %}- {{ query | cell }}
-{% endfor %}
-## Findings by source
+## Appendix B — evidence by source
 {% if not findings %}
-No evidence was stored for this job yet.
+No evidence was stored for this job.
 {% endif %}{% for group in findings %}
 ### {{ group.source_type | cell }} ({{ group.entries | length }})
 {% for item in group.entries %}- {% if item.url %}[{{ item.title or item.url | cell }}]({{ item.url }}){% else %}{{ item.title | cell }}{% endif %}{% if item.author %} — {{ item.author | cell }}{% endif %}{% if item.published %} ({{ item.published | cell }}){% endif %}: {{ item.excerpt | cell }}
 {% endfor %}{% endfor %}
-## Source coverage
+## Appendix C — source coverage
 
 | Source | Items |
 |---|---|
 {% for row in coverage %}| {{ row.source | cell }} | {{ row.count }} |
 {% endfor %}
-## Gaps and how to unlock them
-{% if not gaps %}
-Every recommended source produced evidence. No gaps remain.
-{% endif %}{% for gap in gaps %}
-### {{ gap.source | cell }}
-{% if gap.setup %}- **Set up:** {{ gap.setup | cell }}
-{% endif %}{% for fallback in gap.fallbacks %}- **Fallback:** {{ fallback | cell }}
-{% endfor %}{% if gap.note %}- {{ gap.note | cell }}
-{% endif %}{% endfor %}
+{% if source_runs %}
+## Appendix D — data collection log
+
+Every collection attempt and what it actually returned. An outcome of `empty`, `error`,
+or `rate_limited` means the source was **attempted and failed** — it is not "not available".
+
+| Connector | Query | Outcome | Yield | Note |
+|---|---|---|---|---|
+{% for run in source_runs %}| {{ run.connector | cell }} | {{ (run.query or '') | cell }} | {{ run.outcome | cell }}{% if run.http_status %} ({{ run.http_status }}){% endif %} | {{ run.yield_count }} | {{ (run.error_text or '') | cell }} |
+{% endfor %}
+{% endif %}

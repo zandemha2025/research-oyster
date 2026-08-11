@@ -90,7 +90,7 @@ Kill the AI host session entirely. Start a fresh one and type:
 
 > Use Research Oyster to list my recent research jobs, then show me the dossier for the Kirkland job.
 
-Talking point: "The research outlives the chat. Tomorrow, another teammate — or a scheduled monitor — picks up the same job and fills the gaps." If anyone asks about trust, open `psql gaming_pulse` and run:
+Talking point: "The research outlives the chat. Tomorrow, another teammate picks up the same job — resuming the conversation and its stored synthesis — and fills the gaps." (Scheduled monitors that re-run a job automatically are on the roadmap, not built yet — don't demo them as live.) If anyone asks about trust, open `psql gaming_pulse` and run:
 
 ```sql
 SELECT source_type, url, LEFT(excerpt, 60), query, collected_at

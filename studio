@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Research Oyster Studio — one command to rule them all.
+#
+#   ./studio
+#
+# Idempotent and self-healing: sets up whatever is missing (Python envs, database,
+# migrations), checks you're signed in to Claude, then launches the Studio and opens
+# your browser. Safe to run every time — it only does the missing steps.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+bold(){ printf '\033[1m%s\033[0m\n' "$1"; }
+info(){ printf '  \033[36m→\033[0m %s\n' "$1"; }
+ok(){   printf '  \033[32m✓\033[0m %s\n' "$1"; }
+warn(){ printf '  \033[33m!\033[0m %s\n' "$1"; }
+die(){  printf '\n  \033[31m✗ %s\033[0m\n\n' "$1" >&2; exit 1; }
+
+bold "Research Oyster Studio"
+
+PY="${PYTHON:-python3.11}"; command -v "$PY" >/dev/null 2>&1 || PY=python3
+command -v "$PY" >/dev/null 2>&1 || die "Python 3 is not installed. Run ./install.sh first."
+
+# 1. Core engine env (MCP server + data layer) --------------------------------
+if [ ! -x .venv/bin/python ]; then
+  info "First-time setup: core engine (this runs once)…"
+  "$PY" -m venv .venv
+  .venv/bin/python -m pip install -q --upgrade pip
+  .venv/bin/python -m pip install -q -r requirements.txt
+  ok "core engine ready"
+fi
+
+# 2. Studio env (chat UI + agent SDK) -----------------------------------------
+if [ ! -x .venv-studio/bin/python ]; then
+  info "First-time setup: studio (this runs once)…"
+  "$PY" -m venv .venv-studio
+  .venv-studio/bin/python -m pip install -q --upgrade pip
+  .venv-studio/bin/python -m pip install -q -r requirements-studio.txt
+  ok "studio ready"
+fi
+
+# 3. Database ------------------------------------------------------------------
+if [ ! -f .env ]; then
+  die ".env not found. Run ./install.sh once first — it installs PostgreSQL and creates the database."
+fi
+db_ok(){ .venv/bin/python -c "from settings import Settings; from db.queries import connect; connect(Settings().database_url).close()" >/dev/null 2>&1; }
+if ! db_ok; then
+  info "Starting the local database…"
+  if command -v brew >/dev/null 2>&1; then
+    formula="$(brew list --formula 2>/dev/null | grep -E '^postgresql(@[0-9]+)?$' | tail -1 || true)"
+    [ -n "$formula" ] && brew services start "$formula" >/dev/null 2>&1 || true
+  fi
+  sudo service postgresql start >/dev/null 2>&1 \
+    || sudo pg_ctlcluster "$(ls /etc/postgresql 2>/dev/null | tail -1)" main start >/dev/null 2>&1 \
+    || true
+  sleep 2
+  db_ok || die "Could not reach the database. Run ./install.sh to (re)provision it."
+fi
+.venv/bin/python main.py migrate >/dev/null 2>&1 && ok "database ready"
+
+# 4. Claude sign-in — automatic ------------------------------------------------
+# The Studio runs on your own Claude subscription. If this machine isn't signed in
+# yet, we run the one-time sign-in for you (a browser window opens). No tokens to
+# copy, no files to edit.
+signed_in=0
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] || grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' .env 2>/dev/null; then
+  signed_in=1
+elif command -v claude >/dev/null 2>&1 && claude auth status 2>/dev/null | grep -q '"loggedIn": *true'; then
+  signed_in=1
+fi
+if [ "$signed_in" = "0" ]; then
+  if command -v claude >/dev/null 2>&1; then
+    echo
+    info "One-time Claude sign-in — a browser window will open. Approve it, then we continue."
+    claude auth login || true
+    claude auth status 2>/dev/null | grep -q '"loggedIn": *true' \
+      && ok "signed in to Claude" \
+      || warn "Sign-in didn't finish. Re-run ./studio (or the Desktop icon) to try again."
+  else
+    die "The Claude CLI isn't installed. Install it with:  npm install -g @anthropic-ai/claude-code  then re-run."
+  fi
+else
+  ok "signed in to Claude"
+fi
+# Load a token from .env if present so the SDK subprocess inherits it.
+set -a; [ -f .env ] && . ./.env >/dev/null 2>&1 || true; set +a
+
+# 5. Launch --------------------------------------------------------------------
+echo
+ok "starting… your browser will open at http://127.0.0.1:8770/"
+echo
+exec .venv-studio/bin/python -m research_engine.studio

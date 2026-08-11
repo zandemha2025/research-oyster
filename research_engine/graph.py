@@ -1,0 +1,322 @@
+"""Graph-engineered research pipeline.
+
+'Graph engineering' here means execution-graph orchestration (per the article the user
+referenced): the research run is an explicit graph of specialized NODES connected by
+control-flow EDGES with a shared STATE object — NOT a knowledge graph / GraphRAG.
+
+    plan → discover → parallel(collect lanes) → synthesize → review
+    review == needs_more AND round < MAX → parallel(collect: targeted) → synthesize → review
+    review == pass (or round == MAX) → export → done
+
+Each agent node is an independent, focused agent call that operates on the shared research
+job in Postgres (keyed by job_id) — so 'shared state' is the job itself, and this module
+stays pure orchestration. studio.py injects `run_node` (drives an agent) and `get_dossier`
+(reads the job); this module owns the nodes, prompts, edges, and the deterministic review
+gate. Kept framework-free (no LangGraph) by design.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import re
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable
+
+from research_engine import patterns
+
+MAX_ROUNDS = 2
+
+# Platforms a user might name, and which collection lane serves each.
+KNOWN_PLATFORMS = ["discord", "twitch", "tiktok", "instagram", "reddit", "kick", "youtube", "twitter"]
+LANE_FOR = {
+    "discord": "discord", "twitch": "twitch", "reddit": "reddit", "kick": "kick",
+    "tiktok": "web", "instagram": "web", "youtube": "web", "twitter": "web",
+}
+# A named platform's collection lands under this source_runs connector prefix (for the review gate).
+CONNECTOR_KEY = {"twitch": "twitch", "discord": "discord", "reddit": "reddit"}
+
+NODE_PREAMBLE = (
+    "You are ONE node in a research pipeline. Do ONLY the step described in the message and then "
+    "stop. The user is watching every tool call and raw result live, so be transparent. Never "
+    "call a source that ran and returned nothing usable 'not available' — say plainly it was "
+    "attempted and returned no usable data."
+)
+
+
+@dataclass
+class ResearchState:
+    brief: str
+    job_id: int | None = None
+    named_platforms: list[str] = field(default_factory=list)
+    round: int = 0
+    gaps: list[str] = field(default_factory=list)
+
+
+def detect_platforms(brief: str) -> list[str]:
+    low = brief.lower()
+    return [p for p in KNOWN_PLATFORMS if re.search(rf"\b{p}\b", low)]
+
+
+def default_lanes(state: ResearchState) -> list[str]:
+    """Reddit + web are the workhorses; every named platform always gets its own lane."""
+    lanes = {"reddit", "web"}
+    for p in state.named_platforms:
+        lanes.add(LANE_FOR.get(p, "web"))
+    return sorted(lanes)
+
+
+def lanes_for_gaps(gaps: list[str]) -> list[str]:
+    lanes: set[str] = set()
+    for gap in gaps:
+        gl = gap.lower()
+        for p in KNOWN_PLATFORMS:
+            if p in gl:
+                lanes.add(LANE_FOR.get(p, "web"))
+        if "evidence" in gl or "thin" in gl:
+            lanes.update({"web", "reddit"})
+    return sorted(lanes) or ["web", "reddit"]
+
+
+def review_gate(state: ResearchState, dossier: dict[str, Any]) -> tuple[str, list[str]]:
+    """Deterministic review node: does the run actually cover what was asked, and is the
+    synthesis backed? Returns ('pass'|'needs_more', gaps). This is what stops the agent from
+    silently substituting Reddit for a named platform or exporting a thin/unbacked report."""
+    gaps: list[str] = []
+    runs = dossier.get("source_runs") or []
+    connectors = " ".join(str(r.get("connector", "")) for r in runs)
+    for platform in state.named_platforms:
+        key = CONNECTOR_KEY.get(platform)
+        if key and key not in connectors:
+            gaps.append(f"{platform}: no collection attempt was recorded")
+    synth = dossier.get("synthesis") or {}
+    if not synth.get("executive_answer"):
+        gaps.append("no synthesis authored yet")
+    else:
+        themes = synth.get("themes") or []
+        if themes and all(not t.get("citations") for t in themes):
+            gaps.append("themes are not backed by citations")
+    evidence = dossier.get("evidence") or []
+    if len(evidence) < 3:
+        gaps.append("very thin evidence collected")
+    # Sufficiency: did we actually hear ENOUGH chatter to answer? assess_sufficiency abstains
+    # (enough=True) when there's no text to judge — e.g. landscape/metadata-only rows — so this
+    # only ever fires on real, measurably-thin chatter, never on numbers-only evidence.
+    suff = patterns.assess_sufficiency(evidence)
+    if suff.get("assessable") and not suff.get("enough"):
+        gaps.append("insufficient signal: " + "; ".join(suff.get("reasons") or ["collect more chatter"]))
+    verdict = "needs_more" if (gaps and state.round < MAX_ROUNDS) else "pass"
+    return verdict, gaps
+
+
+# --- node prompts -------------------------------------------------------------
+def plan_prompt(brief: str) -> str:
+    return (
+        f'PLAN step. Create the research job for this brief by calling create_research_job with a '
+        f'clear brief plus model-authored `questions`, `entities`, and `angles`. Brief: "{brief}". '
+        f'Then STOP — do not collect or synthesize. Report the job_id.'
+    )
+
+
+def discover_prompt(state: ResearchState) -> str:
+    return (
+        f"DISCOVER step for research job {state.job_id}. Use discover_sources and/or search_web to "
+        f'find WHERE "{state.brief}" is actually being discussed (subreddits, forums, articles, '
+        f"communities). Do not synthesize. Briefly list the best venues you found."
+    )
+
+
+def collect_prompt(lane: str, state: ResearchState) -> str:
+    j, brief = state.job_id, state.brief
+    prompts = {
+        "reddit": (
+            f'COLLECT step (Reddit) for job {j}. PREFER apify_collect(platform="reddit", query="…") — it '
+            f'returns posts/comments WITH numbers (score, comments) and avoids the anon 403. Also use '
+            f'search_reddit/fetch_reddit_thread for deep threads. Capture real quotes about "{brief}". Do not synthesize.'
+        ),
+        "twitch": (
+            f'COLLECT step (Twitch) for job {j}. Use apify_collect(platform="twitch", query="…") for channel/'
+            f'clip stats WITH numbers (views, followers, viewers); and read_twitch_chat for any channel live on '
+            f'"{brief}" right now (no creds). Store real data via add_evidence. Do not synthesize.'
+        ),
+        "kick": (
+            f'COLLECT step (Kick) for job {j}. NO key needed: search_kick(query="…") returns channel followers, '
+            f'live status, viewer counts, and category WITH numbers about "{brief}"; then read_kick_chat(channel) '
+            f'reads the ACTUAL live chat messages of any channel that is streaming on-topic. apify_collect'
+            f'(platform="kick", …) is the paid alternative. Store via add_evidence. Do not synthesize.'
+        ),
+        "discord": (
+            f'COLLECT step (Discord) for job {j}. Get the most Discord signal WITHOUT any token by stacking public '
+            f'sources: (1) discord_landscape(topic="{brief}") — finds the relevant servers and returns member/online '
+            f'counts + live voice activity WITH numbers; (2) discord_widget on any specific invite for a deeper live '
+            f'read (online members, voice channels); (3) for message CONTENT that leaked publicly, search_reddit and '
+            f'search_web for dev announcements, quotes, and recaps of those servers, and crawl_web_page the best pages. '
+            f"Full in-channel reading is opt-in only — do not attempt it unless enabled. Store via add_evidence. Do not synthesize."
+        ),
+        "web": (
+            f'COLLECT step (Web) for job {j}. Use search_web to find the most relevant public pages/articles about '
+            f'"{brief}", then crawl_web_page the best few; for social platforms prefer apify_collect '
+            f'(platform="tiktok"/"instagram"/"x"/"youtube") to get posts WITH numbers. Store real quotes/claims '
+            f"via add_evidence. Do not synthesize."
+        ),
+    }
+    engagement = (
+        " ENGAGEMENT — REQUIRED: every time you add_evidence, record ALL engagement numbers visible "
+        "for that item into metadata (use metadata={'metrics': {...}} or top-level keys): upvotes/"
+        "score, likes, comments, shares/reposts/retweets, views, dislikes/ratio — whatever that "
+        "channel exposes. This is what lets the report weight by consensus, so a 1k-upvote post "
+        "outweighs an obscure one. If a platform hides a metric (e.g. Reddit has no public share "
+        "count; downvotes are hidden), just omit it — never invent a number, and never store 0 as if "
+        "it were real when the source simply didn't return it."
+    )
+    return prompts.get(lane, prompts["web"]) + engagement
+
+
+def quantify_prompt(state: ResearchState) -> str:
+    j, brief = state.job_id, state.brief
+    return (
+        f"QUANTIFY step for job {j}. Turn the data you collected into REAL numbers — this is what makes "
+        f"the report consultant-grade instead of a summary. "
+        f"(1) Platform metrics: call list_metric_fields({j}), then compute_metric / compute_rate for the "
+        f'figures that matter for "{brief}" (median views/likes/followers by entity, or a rate like '
+        f"shares/views), each grouped and carrying its sample size n. "
+        f"(2) Chatter credibility: call analyze_chatter({j}) — it returns the recurring terms/phrases with "
+        f"counts, per-channel breakdown, anonymized top voices, and a SUFFICIENCY verdict (did we hear "
+        f"enough? saturated? enough substantive messages?). Note the recurring patterns and the sufficiency "
+        f"verdict briefly. "
+        f"If no numeric fields were captured, say so in one line — do not invent numbers. Do NOT synthesize or export."
+    )
+
+
+def verify_prompt(state: ResearchState) -> str:
+    j = state.job_id
+    return (
+        f"VERIFY step for job {j}. Steelman-check the emerging answer. First get_research_dossier({j}) to read the "
+        f"current synthesis and evidence. Then ATTACK the main claim from another angle: re-pull a thin sample for a "
+        f"bigger n, cross-check a key number on a SECOND source or platform, or hunt the strongest DISCONFIRMING "
+        f"evidence. Store what you find via add_evidence and note it as a verification check. Then report in 2–3 "
+        f"sentences whether the claim held up, needs a caveat, or should change. Do NOT rewrite the synthesis or export."
+    )
+
+
+def synth_prompt(state: ResearchState, final: bool = False) -> str:
+    parts = [
+        f"SYNTHESIZE step for job {state.job_id}. Work ONLY through the research tools — do not write "
+        f"code, run shells, or spawn sub-agents; you already have everything you need. First call "
+        f"get_research_dossier({state.job_id}) to see the evidence, coverage, and source_runs ledger, and call "
+        f"compute_metric / compute_rate / analyze_chatter for numbers over ALL rows. Then call "
+        f"write_research_synthesis to author the report.",
+        "WRITE LIKE A McKINSEY/BCG CONSULTANT briefing a busy executive — answer first, scannable, "
+        "plain. The reader must get it at a glance and never feel talked down to or sent in circles.",
+        "• VOICE: plain, confident, concrete. Short sentences. NEVER use a big word where a simple one "
+        "works, and NO jargon for its own sake ('squad-cosmetics flywheel', 'structural incentive "
+        "asymmetry' = bad writing). Weave numbers in naturally — NEVER write 'n=' or expose field names.",
+        "• point_of_view: a sharp 1-2 sentence thesis (a position; may disagree with the brief), NOT a "
+        "paragraph. executive_answer: 2-4 tight sentences.",
+        "• key_takeaways: REQUIRED — 3-5 one-line scannable takeaways for the 'at a glance' box, each a "
+        "complete finding ('Charging reliability is the #1 complaint, ~2x louder than range').",
+        "• themes: each TITLE is an ACTION TITLE — the takeaway as a sentence ('Charging, not range, "
+        "decides the purchase'), never a topic label. insight = 2-3 plain sentences + the 'so what'. "
+        "Break up text; no walls of paragraphs. Back each with a real QUOTE + its specific source URL.",
+        "• WEIGHT BY CONSENSUS, not mention count: a comment/post is worth the people behind it — a "
+        "1k-upvote comment is ~1000 people agreeing, not one voice. analyze_chatter returns a "
+        "'consensus' ranking (aggregate upvotes/shares/comments per group, views sqrt-damped, dislikes "
+        "subtract) and each evidence row carries its 'engagement'. LEAD with the highest-endorsement "
+        "findings and cite the weight in plain words ('the top complaint, ~4,300 upvotes across 8 "
+        "threads'). A single high-endorsement datapoint can outrank many obscure ones. Treat counts as "
+        "a strong-but-imperfect proxy (big communities/old posts inflate) — don't overclaim precision.",
+        "• numbered_sources: the [n] bibliography — {n, label, url (SPECIFIC deep link), tool} — every "
+        "quote's source appears; reference [n] in the prose.",
+        "• metrics_tables: computed figures from compute_metric / analyze_chatter (never hand-typed); "
+        "plain-English titles. method: ONE short plain section on how you got the findings (skippable). "
+        "confidence: plain-English ('based on a modest sample', not 'n=12').",
+        "• ANONYMIZE speakers (user_xxxx). If a source was blocked, route around it and give it ONE "
+        "closing line — limitations are a short caveat, never the headline. Never fabricate.",
+    ]
+    if state.named_platforms:
+        parts.append(
+            f"The user explicitly named: {', '.join(state.named_platforms)} — account for each, but lead with the "
+            f"answer, not with what you couldn't get."
+        )
+    if state.gaps:
+        parts.append(f"A prior review flagged: {'; '.join(state.gaps)} — address these.")
+    parts.append(
+        "Even if evidence is thin, synthesize what you HAVE with a real executive_answer and a point_of_view — do "
+        "NOT finish this step without calling write_research_synthesis."
+    )
+    if final:
+        parts.append("This is the FINAL synthesis; author it now from all evidence, metrics, and verification.")
+    parts.append("Do NOT export.")
+    return " ".join(parts)
+
+
+def _has_synthesis(dossier: dict[str, Any]) -> bool:
+    return bool((dossier.get("synthesis") or {}).get("executive_answer"))
+
+
+def export_prompt(state: ResearchState) -> str:
+    return f"EXPORT step for job {state.job_id}. Call export_research_report({state.job_id}) and report the folder path."
+
+
+# --- the runner ---------------------------------------------------------------
+RunNode = Callable[[str, str, int], Awaitable[dict[str, Any]]]
+GetDossier = Callable[[int], dict[str, Any]]
+Emit = Callable[[dict[str, Any]], None]
+
+# Per-node inactivity timeout (seconds). A stalled node fails alone; the run continues.
+TIMEOUTS = {"plan": 120, "discover": 120, "collect": 200, "quantify": 180,
+            "synthesize": 300, "verify": 200, "export": 90}
+
+
+async def run_graph(brief: str, emit: Emit, run_node: RunNode, get_dossier: GetDossier) -> None:
+    state = ResearchState(brief=brief, named_platforms=detect_platforms(brief))
+    planned = default_lanes(state)
+    emit({"type": "graph_init", "named_platforms": state.named_platforms,
+          "nodes": ["plan", "discover", *[f"collect:{l}" for l in planned],
+                    "quantify", "synthesize", "review", "verify", "export"]})
+
+    plan = await run_node("plan", plan_prompt(brief), TIMEOUTS["plan"])
+    state.job_id = plan.get("job_id")
+    if not state.job_id:
+        emit({"type": "error", "message": (
+            "The pipeline could not create a research job. This usually means the machine isn't signed in "
+            "to Claude — run `claude auth login` in Terminal, then try again.")})
+        return
+
+    await run_node("discover", discover_prompt(state), TIMEOUTS["discover"])
+
+    while True:
+        state.round += 1
+        lanes = lanes_for_gaps(state.gaps) if state.gaps else default_lanes(state)
+        emit({"type": "note", "text": f"Round {state.round}: collecting from {', '.join(lanes)}."})
+        await asyncio.gather(*[run_node(f"collect:{lane}", collect_prompt(lane, state), TIMEOUTS["collect"]) for lane in lanes])
+
+        # QUANTIFY: turn the collected data into real numbers before we write the answer.
+        await run_node("quantify", quantify_prompt(state), TIMEOUTS["quantify"])
+
+        await run_node("synthesize", synth_prompt(state), TIMEOUTS["synthesize"])
+
+        emit({"type": "node", "id": "review", "state": "running"})
+        verdict, gaps = review_gate(state, get_dossier(state.job_id))
+        state.gaps = gaps
+        emit({"type": "node", "id": "review", "state": "done",
+              "detail": verdict + (": " + "; ".join(gaps) if gaps else "")})
+        if verdict == "pass":
+            break
+        emit({"type": "note", "text": f"Review found gaps — looping to collect more: {'; '.join(gaps)}"})
+
+    # VERIFY: steelman the answer once it's backed — cross-check a key number / hunt disconfirming
+    # evidence — then author the FINAL results-first synthesis incorporating what verify found.
+    if _has_synthesis(get_dossier(state.job_id)):
+        await run_node("verify", verify_prompt(state), TIMEOUTS["verify"])
+
+    emit({"type": "note", "text": "Authoring the final results-first write-up."})
+    await run_node("synthesize", synth_prompt(state, final=True), TIMEOUTS["synthesize"])
+
+    if not _has_synthesis(get_dossier(state.job_id)):
+        emit({"type": "error", "message": (
+            "The pipeline collected evidence but could not author a synthesis, so there is no report yet. "
+            "Ask it directly in the chat: 'write the synthesis and export the report for job "
+            f"{state.job_id}'.")})
+        return
+
+    await run_node("export", export_prompt(state), TIMEOUTS["export"])

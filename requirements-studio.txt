@@ -1,0 +1,19 @@
+# Research Oyster Studio (the live chat UI) runs in its own virtualenv, .venv-studio,
+# separate from the main app's .venv. Reason: claude-agent-sdk pins mcp<2.0 while the
+# MCP server (research_engine/mcp_server.py) needs mcp>=2.0. The Studio launches the
+# MCP server as a subprocess via .venv/bin/python, so the two mcp versions stay isolated.
+#
+# Set up with:  ./setup-studio.sh   (or: python3.11 -m venv .venv-studio && \
+#                                     .venv-studio/bin/pip install -r requirements-studio.txt)
+
+claude-agent-sdk>=0.2,<1      # drives the model; pulls in mcp<2.0
+starlette>=1.0,<2             # web app
+uvicorn>=0.30                 # ASGI server
+sse-starlette>=2.0            # server-sent events for live streaming
+
+# The Studio imports these repo modules directly (store, export, settings), so it needs
+# the same data-layer deps as the main app:
+psycopg[binary]>=3.1,<4
+Jinja2>=3.1,<4
+pydantic-settings>=2.2,<3
+httpx>=0.27,<1
