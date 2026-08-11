@@ -735,6 +735,26 @@ app = Starlette(routes=routes)
 from research_engine.studio_page import PAGE  # noqa: E402
 
 
+def _reap_stale_studio() -> None:
+    """Kill a stale Studio still holding our port from a previous run — the reason a reinstall's new
+    code never loads (the old process keeps serving). Only kills a process whose command line is our
+    own research_engine.studio; never an unrelated app on the port."""
+    try:
+        pids = subprocess.run(["lsof", "-ti", f"tcp:{STUDIO_PORT}"],
+                              capture_output=True, text=True, timeout=5).stdout.split()
+    except Exception:
+        return
+    for pid in [p for p in pids if p.strip().isdigit()]:
+        try:
+            cmd = subprocess.run(["ps", "-p", pid, "-o", "command="],
+                                 capture_output=True, text=True, timeout=5).stdout
+            if "research_engine.studio" in cmd and int(pid) != os.getpid():
+                os.kill(int(pid), 9)
+        except Exception:
+            pass
+    time.sleep(1)
+
+
 def main() -> None:
     import threading
     import webbrowser
@@ -744,16 +764,22 @@ def main() -> None:
     import socket
 
     # Fail fast with a friendly message if the port is taken, instead of an uvicorn stack trace.
-    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        probe.bind(("127.0.0.1", STUDIO_PORT))
-        probe.close()
-    except OSError:
-        probe.close()
-        print(f"\n  Research Oyster Studio can't start: port {STUDIO_PORT} is already in use.\n"
-              f"  It's probably already running — open http://127.0.0.1:{STUDIO_PORT}/ in your browser.\n"
-              f"  (To stop the old one: pkill -f research_engine.studio, then run ./studio again.)\n")
-        raise SystemExit(1)
+    def _port_free() -> bool:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.bind(("127.0.0.1", STUDIO_PORT)); probe.close(); return True
+        except OSError:
+            probe.close(); return False
+
+    if not _port_free():
+        # A stale Studio from a previous run is holding the port — the reason a reinstall's new code
+        # never loads (the old process keeps serving). Reap only our own Studio, then retry once, so
+        # `./studio` after an update always brings up the CURRENT code without hand-hunting a zombie.
+        _reap_stale_studio()
+        if not _port_free():
+            print(f"\n  Research Oyster Studio can't start: port {STUDIO_PORT} is in use by another app.\n"
+                  f"  Stop it (lsof -ti tcp:{STUDIO_PORT} | xargs kill -9), then run ./studio again.\n")
+            raise SystemExit(1)
 
     # We own the Studio port, so we're the single Studio instance — reap any orphaned MCP server
     # from a previously-killed Studio so this run's collection/export uses the current code.
