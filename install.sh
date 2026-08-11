@@ -3,9 +3,9 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | bash
 #
-# To install a specific branch (e.g. the current Studio build before it's merged to main), set
-# OYSTER_BRANCH — this is what docs/STUDIO.md instructs for the Studio:
-#   curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | OYSTER_BRANCH=claude/demo-prep-p0iazw bash
+# The default branch (main) ships the live Studio UI and opens it when the install finishes.
+# To install a different branch, set OYSTER_BRANCH:
+#   curl -fsSL https://raw.githubusercontent.com/zandemha2025/research-oyster/main/install.sh | OYSTER_BRANCH=some-branch bash
 #
 # Downloads Oyster, installs Python + PostgreSQL if they are missing, creates and migrates a
 # local database, and attaches Oyster to Claude Code / Codex. Safe to re-run: it updates in
@@ -18,11 +18,7 @@
 set -euo pipefail
 
 REPO_URL="${OYSTER_REPO:-https://github.com/zandemha2025/research-oyster.git}"
-# DEMO/STUDIO BRANCH: this installer ships the live Studio UI, which lives on the
-# claude/demo-prep-p0iazw branch until it is merged to main. Default to that branch so the
-# single-line curl below installs Studio (not the old control center on main).
-# >>> AT MERGE TO MAIN: reset this default back to "main". <<<
-BRANCH="${OYSTER_BRANCH:-claude/demo-prep-p0iazw}"
+BRANCH="${OYSTER_BRANCH:-main}"
 DEST="${OYSTER_HOME:-$HOME/research-oyster}"
 DB_NAME="gaming_pulse"
 
