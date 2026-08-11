@@ -91,11 +91,13 @@ def format_capture_plan(topic: str, communities: list[dict], channels: list[str]
                 f"search, so if you know a specific server, open it and search there and I'll "
                 f"capture — otherwise the same conversation is usually richer on Reddit/YouTube.")
     lines = [
-        f"Here’s where the “{topic}” conversation likely lives on Discord. **Click a server to open "
-        f"it in your browser** (you must be a member — join if you want). Then use Discord’s **search "
-        f"bar** for the terms below, or open the channels I list, and scroll the results — I capture "
-        f"the messages automatically as they load. I never open, search, or scroll for you.",
+        f"Here’s where the “{topic}” conversation lives on Discord. **Open these {len(communities)} "
+        f"server{'s' if len(communities) != 1 else ''}** (click each — you must be a member, join if "
+        f"you want), and **search the SAME terms in each one**. You don’t match a term to a tab — it’s "
+        f"the same terms everywhere. I capture the results automatically; I never open, search, or "
+        f"scroll for you.",
         "",
+        "**Open these tabs:**",
     ]
     for i, c in enumerate(communities, 1):
         name = c.get("name") or c.get("invite_code") or "server"
@@ -106,14 +108,15 @@ def format_capture_plan(topic: str, communities: list[dict], channels: list[str]
         if c.get("online") is not None:
             size.append(f"{int(c['online']):,} online")
         sizetxt = f" — {', '.join(size)}" if size else ""
-        lines.append(f"{i}. [{name}]({url}){sizetxt}")
+        lines.append(f"- ☐ [{name}]({url}){sizetxt}")
     lines.append("")
     if terms:
-        lines.append("In each server’s **search bar**, type: " + " · ".join(f"`{t}`" for t in terms))
-    lines.append("Or browse channels like: " + ", ".join(channels))
+        lines.append("**Paste these into each server’s search bar** (I picked them — click to copy): "
+                     + "  ".join(f"`{t}`" for t in terms))
+    lines.append(f"Or browse channels like: {', '.join(channels)}.")
     if armed:
         lines.append("")
-        lines.append("✅ Hands-free capture is armed for discord.com — approve it once in the Oyster "
-                     "extension (or trust the domain), then just click, search, and scroll. Everything "
-                     "on-topic lands in this job as raw data.")
+        lines.append("✅ Hands-free capture is armed for **discord.com** — approve it once in the Oyster "
+                     "extension (or trust the domain), then just click each server, paste the terms, and "
+                     "scroll. Everything on-topic lands in this job as raw data.")
     return "\n".join(lines)

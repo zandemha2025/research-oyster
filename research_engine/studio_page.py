@@ -52,6 +52,10 @@ PAGE = r'''<!doctype html>
 .downloads .dlabel{font-size:12px;color:var(--muted);margin-right:2px}
 .downloads .chip{font-size:12px;text-decoration:none;color:var(--ink);background:var(--panel,#f4f2ec);border:1px solid var(--line);border-radius:999px;padding:3px 10px}
 .downloads .chip:hover{border-color:var(--accent,#c2410c);color:var(--accent,#c2410c)}
+.copychip{font:inherit;font-size:12px;cursor:pointer;color:var(--accent,#c2410c);background:var(--panel,#f4f2ec);border:1px solid var(--line);border-radius:999px;padding:1px 9px;margin:0 3px;vertical-align:baseline}
+.copychip:hover{border-color:var(--accent,#c2410c)}
+.copychip.copied{color:#155744;border-color:#155744}
+.msglink{color:var(--accent,#c2410c);text-decoration:underline;text-underline-offset:2px}
 .empty{color:var(--muted);padding:40px 16px;text-align:center;font-size:13px}
 .pill{font-size:11px;border-radius:20px;padding:2px 9px;background:var(--wash);color:var(--muted)}
 .pill.ok{background:#e7f3ec;color:var(--green)}
@@ -165,6 +169,12 @@ function streamBox(){return document.getElementById('stream')}
 function scrollStream(){const s=streamBox();s.scrollTop=s.scrollHeight}
 function feedBox(){return document.getElementById('feed')}
 
+// Enrich a finished Oyster message: turn markdown links [text](url) into clickable links (so you can
+// click a Discord server to open it), and `backtick` terms into one-click copy chips (so you paste
+// search terms instead of typing). Idempotent: each body is processed once. Plain textContent slices
+// keep it injection-safe; link hrefs are constrained to http(s) by the regex.
+function chipify(root){(root||document).querySelectorAll('.msg.assistant .body-text:not(.chipified)').forEach(bt=>{bt.classList.add('chipified');const text=bt.textContent;if(!/[`\[]/.test(text))return;const frag=document.createDocumentFragment();let last=0;const re=/\[([^\]\n]{1,80})\]\((https?:\/\/[^)\s]+)\)|`([^`\n]{1,60})`/g;let m;while((m=re.exec(text))){if(m.index>last)frag.appendChild(document.createTextNode(text.slice(last,m.index)));if(m[2]){const a=document.createElement('a');a.href=m[2];a.target='_blank';a.rel='noopener noreferrer';a.textContent=m[1];a.className='msglink';frag.appendChild(a)}else{const term=m[3];const chip=el('button','copychip',term);chip.title='Click to copy';chip.onclick=async()=>{try{await navigator.clipboard.writeText(term);chip.textContent='copied ✓';chip.classList.add('copied');setTimeout(()=>{chip.textContent=term;chip.classList.remove('copied')},1200)}catch(e){}};frag.appendChild(chip)}last=m.index+m[0].length}if(last<text.length)frag.appendChild(document.createTextNode(text.slice(last)));bt.textContent='';bt.appendChild(frag)})}
+
 function onEvent(type,data){
   if(type==='ping')return;
   if(type==='graph_init'){nodeBubbles={};initGraph(data.nodes);showTab('graph');return}
@@ -179,9 +189,9 @@ function onEvent(type,data){
   if(type==='tool_call'){curThinking=null;addEvt('call','→',data.name,JSON.stringify(data.input,null,2));return}
   if(type==='tool_result'){addEvt('result'+(data.is_error?' err':''),data.is_error?'✕':'✓',data.name||'result',data.content);if(/export_research_report|write_research_synthesis/.test(data.name||'')){const c=convs[active];if(c&&c.job_ids&&c.job_ids.length)setTimeout(()=>rebuildReportSelect(c.job_ids[c.job_ids.length-1]),600)}return}
   if(type==='job_linked'){const c=convs[active];if(c&&!c.job_ids.includes(data.job_id)){c.job_ids.push(data.job_id);rebuildReportSelect(data.job_id)}refreshConvos();return}
-  if(type==='result'){delete nodeBubbles[data.node||'_'];if(data.cost_usd!=null){const f=el('div','msg muted','— turn complete · $'+Number(data.cost_usd).toFixed(4));streamBox().appendChild(f)}return}
+  if(type==='result'){delete nodeBubbles[data.node||'_'];chipify(streamBox());if(data.cost_usd!=null){const f=el('div','msg muted','— turn complete · $'+Number(data.cost_usd).toFixed(4));streamBox().appendChild(f)}return}
   if(type==='error'){curAssistant=null;const m=el('div','msg err');m.innerHTML='<b class="who">error</b>'+esc(data.message);streamBox().appendChild(m);scrollStream();return}
-  if(type==='done'){nodeBubbles={};document.getElementById('input').disabled=false;document.getElementById('sendbtn').disabled=false;const c=convs[active];if(c&&c.job_ids&&c.job_ids.length)rebuildReportSelect(c.job_ids[c.job_ids.length-1]);loadReports();refreshConvos();return}
+  if(type==='done'){nodeBubbles={};chipify(streamBox());document.getElementById('input').disabled=false;document.getElementById('sendbtn').disabled=false;const c=convs[active];if(c&&c.job_ids&&c.job_ids.length)rebuildReportSelect(c.job_ids[c.job_ids.length-1]);loadReports();refreshConvos();return}
 }
 
 function addEvt(cls,ico,name,body){const f=feedBox();if(f.querySelector('.empty'))f.innerHTML='';

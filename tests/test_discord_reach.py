@@ -49,6 +49,7 @@ def test_format_capture_plan_has_links_terms_and_armed_notice():
     assert "`Wolverine`" in plan and "`Insomniac`" in plan
     assert "search bar" in plan.lower()
     assert "armed" in plan.lower()
+    assert "☐" in plan  # rendered as a checklist of tabs to open
     # never claims to act for the user
     assert "never open, search, or scroll for you" in plan.lower()
 
